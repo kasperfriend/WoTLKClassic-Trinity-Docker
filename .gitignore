@@ -1,0 +1,14 @@
+# Local runtime data
+data/
+logs/
+import/*
+!import/world/
+import/world/*
+!import/world/.gitkeep
+
+# Secrets
+.env
+
+# OS noise
+.DS_Store
+Thumbs.db

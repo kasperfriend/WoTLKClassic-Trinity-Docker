@@ -1,0 +1,93 @@
+# ============================================================================
+#  TrinityCore 3.4.3 (WotLK Classic) — full stack
+#    mysql       : MySQL 8.0 (native-password mode, required by the core)
+#    bnetserver  : logon server        -> ports 1119 (bnet) + 8081 (REST)
+#    worldserver : game server         -> port 8085
+#
+#  Start:            docker compose up -d
+#  First boot:       downloads the TDB 3.4.3 world DB and imports it
+#                    (10–30 min — watch `docker compose logs -f worldserver`)
+#  Client data:      run helpers/extract-data.sh, data lands in ./data
+# ============================================================================
+name: wow343
+
+services:
+  mysql:
+    image: mysql:8.0
+    command:
+      - --default-authentication-plugin=mysql_native_password
+      - --max_allowed_packet=1G
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-wow}
+      MYSQL_ROOT_HOST: "%"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "mysqladmin ping -h 127.0.0.1 -uroot -p$$MYSQL_ROOT_PASSWORD --silent"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+      start_period: 60s
+
+  bnetserver:
+    # Daily-built image from GitHub Actions — set SERVER_IMAGE in .env
+    image: ${SERVER_IMAGE:-ghcr.io/your-github-username/trinitycore-3.4.3:latest}
+    # Fallback: build locally from this repo when the image is missing
+    build: .
+    command: ["bnetserver"]
+    environment: &dbenv
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      MYSQL_USER: root
+      MYSQL_PASSWORD: ${MYSQL_ROOT_PASSWORD:-wow}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-wow}
+      AUTO_DOWNLOAD_DB: ${AUTO_DOWNLOAD_DB:-true}
+      REALM_NAME: ${REALM_NAME:-TrinityCore 3.4.3}
+      REALM_ADDRESS: ${REALM_ADDRESS:-127.0.0.1}
+      TZ: ${TZ:-Europe/Kiev}
+    ports:
+      - "1119:1119"   # battle.net logon protocol
+      - "8081:8081"   # login REST service
+    volumes: &vol
+      - ./data:/opt/tc/data
+      - ./logs:/opt/tc/logs
+      - ./import:/opt/tc/import
+    depends_on:
+      mysql:
+        condition: service_healthy
+    stdin_open: true   # keep console attachable: docker attach wow343-bnetserver-1
+    tty: true
+    restart: unless-stopped
+    stop_grace_period: 30s
+    healthcheck:
+      test: ["CMD", "healthcheck.sh"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 90s
+
+  worldserver:
+    image: ${SERVER_IMAGE:-ghcr.io/your-github-username/trinitycore-3.4.3:latest}
+    build: .
+    command: ["worldserver"]
+    environment: *dbenv
+    ports:
+      - "8085:8085"
+    volumes: *vol
+    depends_on:
+      mysql:
+        condition: service_healthy
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+    stop_grace_period: 60s   # worldserver saves character/world state on shutdown
+    healthcheck:
+      test: ["CMD", "healthcheck.sh"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+      start_period: 45m   # first boot imports the whole world DB
+
+volumes:
+  mysql-data:

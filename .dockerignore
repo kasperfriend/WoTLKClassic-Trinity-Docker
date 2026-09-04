@@ -1,0 +1,12 @@
+# Never bake local data into the build context
+source/
+data/
+logs/
+import/
+*.sql
+.env
+.git
+.github
+README.md
+helpers/
+docker-compose.yml
