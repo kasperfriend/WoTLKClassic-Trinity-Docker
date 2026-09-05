@@ -32,7 +32,7 @@ services:
 
   bnetserver:
     # Daily-built image from GitHub Actions — set SERVER_IMAGE in .env
-    image: ${SERVER_IMAGE:-ghcr.io/your-github-username/trinitycore-3.4.3:latest}
+    image: ${SERVER_IMAGE:-ghcr.io/kasperfriend/trinitycore-3.4.3:latest}
     # Fallback: build locally from this repo when the image is missing
     build: .
     command: ["bnetserver"]
@@ -68,7 +68,7 @@ services:
       start_period: 90s
 
   worldserver:
-    image: ${SERVER_IMAGE:-ghcr.io/your-github-username/trinitycore-3.4.3:latest}
+    image: ${SERVER_IMAGE:-ghcr.io/kasperfriend/trinitycore-3.4.3:latest}
     build: .
     command: ["worldserver"]
     environment: *dbenv
