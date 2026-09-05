@@ -81,6 +81,11 @@ FROM ubuntu:${UBUNTU_VERSION}
 
 ARG DEBIAN_FRONTEND=noninteractive
 
+# NOTE: libmysqlclient21 is NOT optional — the builder's default-libmysqlclient-dev
+# links worldserver/bnetserver against libmysqlclient.so.21 (see the core's
+# cmake/macros/FindMySQL.cmake, which resolves `mysql_config --libs_r`).
+# libmariadb3 only provides libmariadb.so.3, so without it both servers die at
+# the dynamic loader with "error while loading shared libraries".
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       bash \
@@ -94,6 +99,7 @@ RUN apt-get update \
       libboost-system1.83.0 \
       libboost-thread1.83.0 \
       libmariadb3 \
+      libmysqlclient21 \
       libreadline8t64 \
       libssl3t64 \
       mariadb-client \

@@ -22,11 +22,11 @@ CLIENT="${1:-}"
 [ -n "$CLIENT" ] || { echo "usage: $0 /path/to/3.4.3/client"; exit 1; }
 CLIENT="$(cd "$CLIENT" && pwd)"
 
-IMAGE="${SERVER_IMAGE:-ghcr.io/your-github-username/trinitycore-3.4.3:latest}"
-# Fall back to a locally built image if the GHCR one isn't available
+IMAGE="${SERVER_IMAGE:-trinitycore-3.4.3:local}"
+# Fall back to a locally built image if the configured one isn't available
 if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
   IMAGE="trinitycore-3.4.3:local"
-  echo "GHCR image not found locally — building $IMAGE ..."
+  echo "Image not found locally — building $IMAGE ..."
   docker build -t "$IMAGE" "$(cd "$(dirname "$0")/.." && pwd)"
 fi
 

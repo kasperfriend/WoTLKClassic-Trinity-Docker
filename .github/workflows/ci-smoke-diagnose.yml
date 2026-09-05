@@ -1,7 +1,6 @@
-# TEMPORARY diagnostic workflow.
-# This sandbox has no Docker and cannot reach ghcr.io or read Actions log
-# archives, so this workflow builds the image on a runner and commits the
-# findings back as files the sandbox can read through the GitHub API.
+# TEMPORARY verification workflow — proves the fixes.
+# This sandbox has no Docker and cannot reach ghcr.io / docker.io, so the checks
+# run on a runner and the results are committed back where they can be read.
 name: ci-smoke-diagnose
 
 on:
@@ -11,93 +10,46 @@ on:
     paths:
       - ".github/workflows/ci-smoke-diagnose.yml"
       - "Dockerfile"
+      - "docker-compose.yml"
 
 permissions:
   contents: write
   packages: read
 
 jobs:
-  registry:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Query GHCR
-        shell: bash
-        continue-on-error: true
-        run: |
-          R="ci-registry-report.md"
-          echo "# GHCR registry report ($(date -u +%FT%TZ))" > "$R"
-          TOK_JSON="$(curl -s -u "ignored:${{ secrets.GITHUB_TOKEN }}" \
-            "https://ghcr.io/token?scope=repository:kasperfriend/wotlkclassic-trinity-docker:pull" || true)"
-          TOK="$(printf '%s' "$TOK_JSON" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')"
-          echo "- anonymous/token token obtained: $([ -n "$TOK" ] && echo yes || echo no)" >> "$R"
-          for NAME in \
-            kasperfriend/wotlkclassic-trinity-docker \
-            kasperfriend/trinitycore-3.4.3 ; do
-            echo "" >> "$R"
-            echo "## $NAME" >> "$R"
-            echo '```' >> "$R"
-            curl -s -o /tmp/tags.json -w "tags/list HTTP %{http_code}\n" \
-              ${TOK:+-H "Authorization: Bearer $TOK"} \
-              "https://ghcr.io/v2/$NAME/tags/list" >> "$R" 2>&1
-            cat /tmp/tags.json >> "$R" 2>/dev/null; echo >> "$R"
-            for TAG in latest 2026.09.05; do
-              curl -s -o /dev/null -w "  HEAD $NAME:$TAG -> HTTP %{http_code}\n" \
-                ${TOK:+-H "Authorization: Bearer $TOK"} \
-                -H "Accept: application/vnd.oci.image.index.v1+json" \
-                "https://ghcr.io/v2/$NAME/manifests/$TAG" >> "$R" 2>&1
-            done
-            echo '```' >> "$R"
-          done
-          cat "$R"
-      - name: Publish
-        if: always()
-        shell: bash
-        run: |
-          [ -f ci-registry-report.md ] || echo "no registry report" > ci-registry-report.md
-          git config user.name  "arena-diagnostic[bot]"
-          git config user.email "arena-diagnostic[bot]@users.noreply.github.com"
-          git add ci-registry-report.md
-          git commit -m "ci: registry report" || echo "nothing to commit"
-          git pull --rebase origin "$GITHUB_REF_NAME" || true
-          git push origin "HEAD:$GITHUB_REF_NAME"
-
-  build:
-    needs: registry
+  verify:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
+          fetch-depth: 1
 
-      - name: Build the CURRENT (unfixed) Dockerfile from main
+      - name: Validate compose file
         shell: bash
         run: |
-          git show origin/main:Dockerfile > Dockerfile.main 2>/dev/null || git show main:Dockerfile > Dockerfile.main
-          echo "== building image exactly as a user would (Dockerfile from main) =="
-          docker build -f Dockerfile.main -t unfixed:latest . 2>&1 | tail -40
+          R=ci-verify-report.md
+          echo "# verification report ($(date -u +%FT%TZ))" > "$R"
+          echo "" >> "$R"
+          echo "## 1. docker compose config (validity + resolved image)" >> "$R"
+          echo '```' >> "$R"
+          docker compose config >> "$R" 2>&1 && echo "COMPOSE_CONFIG_OK" >> "$R" || echo "COMPOSE_CONFIG_FAILED" >> "$R"
+          echo '```' >> "$R"
 
-      - name: Inspect the unfixed image
+      - name: Build the fixed image
+        shell: bash
+        run: |
+          docker build -t trinitycore-3.4.3:local . 2>&1 | tail -25
+
+      - name: Run the exact daily-rebuild smoke test
         shell: bash
         continue-on-error: true
         run: |
-          R="ci-build-report.md"
-          echo "# build report ($(date -u +%FT%TZ))" > "$R"
+          R=ci-verify-report.md
+          IMAGE="trinitycore-3.4.3:local"
           echo "" >> "$R"
-          echo "## A. unfixed image (Dockerfile from main): ldd" >> "$R"
+          echo "## 2. link check (exact CI check)" >> "$R"
           echo '```' >> "$R"
-          docker run --rm --network none --entrypoint /bin/bash unfixed:latest -c '
-            for b in /opt/tc/bin/*; do echo "--- $b"; ldd "$b" 2>&1 | grep -E "not found|mysql|mariadb|boost|ssl|readline"; done
-            echo "=== mysql/mariadb sonames present in image ==="
-            ldconfig -p | grep -iE "mysql|mariadb" || echo "(none)"
-            echo "=== installed mysql/mariadb packages ==="
-            dpkg -l | grep -iE "mysql|mariadb" || echo "(none)"
-          ' >> "$R" 2>&1
-          echo '```' >> "$R"
-          echo "" >> "$R"
-          echo "## B. unfixed image: the EXACT daily-rebuild link check" >> "$R"
-          echo '```' >> "$R"
-          if docker run --rm --network none --entrypoint /bin/bash unfixed:latest -c '
+          if docker run --rm --network none --entrypoint /bin/bash "$IMAGE" -c '
               set -e
               for b in /opt/tc/bin/*; do
                 if ldd "$b" | grep -q "not found"; then
@@ -107,25 +59,98 @@ jobs:
               echo "ALL_BINARIES_LINK_OK"'; then
             echo "LINKCHECK_PASS" >> "$R"
           else
-            echo "LINKCHECK_FAIL  <-- this is what fails the daily-rebuild smoke test" >> "$R"
+            echo "LINKCHECK_FAIL" >> "$R"
           fi
           echo '```' >> "$R"
           echo "" >> "$R"
-          echo "## C. unfixed image: bnetserver banner check" >> "$R"
-          OUT="$(docker run --rm --network none --entrypoint /opt/tc/bin/bnetserver unfixed:latest \
-                 -c /opt/tc/etc/bnetserver.conf.dist 2>&1 | head -30)" || true
+          echo "## 2b. libmysqlclient now present" >> "$R"
+          echo '```' >> "$R"
+          docker run --rm --network none --entrypoint /bin/bash "$IMAGE" -c '
+            ldd /opt/tc/bin/worldserver | grep -iE "mysql|mariadb"
+            ldconfig -p | grep -iE "libmysqlclient|libmariadb"' >> "$R" 2>&1
+          echo '```' >> "$R"
+          echo "" >> "$R"
+          echo "## 3. banner check (NEW, exact CI check)" >> "$R"
+          OUT="$(docker run --rm --network none -e "TC_LOGGER_ROOT=4,Console" \
+                  --entrypoint /opt/tc/bin/bnetserver "$IMAGE" \
+                  -c /opt/tc/etc/bnetserver.conf.dist 2>&1 | head -40)" || true
           echo '```' >> "$R"; echo "$OUT" >> "$R"; echo '```' >> "$R"
-          echo "$OUT" | grep -qiE "bnetserver|TrinityCore" && echo "BANNER_PASS" >> "$R" || echo "BANNER_FAIL" >> "$R"
-          cat "$R"
+          if echo "$OUT" | grep -qE "error while loading shared libraries|cannot open shared object file"; then
+            echo "BANNER_FAIL (loader error)" >> "$R"
+          elif echo "$OUT" | grep -qF "<Ctrl-C> to stop."; then
+            echo "BANNER_PASS" >> "$R"
+          else
+            echo "BANNER_FAIL (no banner)" >> "$R"
+          fi
+          echo "" >> "$R"
+          echo "## 3b. old check on the OLD image would have been a false pass —" >> "$R"
+          echo "    proof: grep -qiE 'bnetserver|TrinityCore' matches a loader error." >> "$R"
+          echo '```' >> "$R"
+          echo '/opt/tc/bin/bnetserver: error while loading shared libraries: libmysqlclient.so.21: cannot open shared object file' \
+            | grep -qiE "bnetserver|TrinityCore" && echo "old-grep matches a loader error => confirmed false positive" >> "$R"
+          echo '```' >> "$R"
 
-      - name: Publish part 1
+      - name: End-to-end — bnetserver against a real MySQL via compose
+        shell: bash
+        continue-on-error: true
+        run: |
+          R=ci-verify-report.md
+          echo "" >> "$R"
+          echo "## 4. docker compose up mysql + bnetserver (AUTO_DOWNLOAD_DB=false)" >> "$R"
+          echo '```' >> "$R"
+          export AUTO_DOWNLOAD_DB=false
+          docker compose up -d --no-build mysql bnetserver >> "$R" 2>&1 \
+            && echo "COMPOSE_UP_OK" >> "$R" || echo "COMPOSE_UP_FAILED" >> "$R"
+          for i in $(seq 1 30); do
+            H="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' wow343-bnetserver-1 2>/dev/null || echo missing)"
+            S="$(docker inspect --format '{{.State.Status}}' wow343-bnetserver-1 2>/dev/null || echo missing)"
+            echo "  t=${i}0s bnetserver state=$S health=$H" >> "$R"
+            [ "$H" = "healthy" ] && break
+            [ "$S" = "exited" ] && break
+            sleep 10
+          done
+          echo "--- bnetserver logs (last 40)" >> "$R"
+          docker logs --tail 40 wow343-bnetserver-1 >> "$R" 2>&1
+          echo "--- port 1119 from the host" >> "$R"
+          (exec 3<>/dev/tcp/127.0.0.1/1119) 2>/dev/null && echo "PORT_1119_OPEN" >> "$R" || echo "PORT_1119_CLOSED" >> "$R"
+          echo "--- auth.realmlist row written by the entrypoint" >> "$R"
+          docker compose exec -T mysql mysql -uroot -pwow -e 'SELECT id,name,address,port FROM auth.realmlist;' >> "$R" 2>&1
+          echo '```' >> "$R"
+          docker compose down -v >> /dev/null 2>&1 || true
+
+      - name: GHCR package state (is the image pullable by others?)
+        shell: bash
+        continue-on-error: true
+        run: |
+          R=ci-verify-report.md
+          echo "" >> "$R"
+          echo "## 5. GHCR package state" >> "$R"
+          echo '```' >> "$R"
+          echo "- GET /users/kasperfriend/packages?package_type=container (with GITHUB_TOKEN):" >> "$R"
+          curl -s -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            -H "Accept: application/vnd.github+json" \
+            "https://api.github.com/users/kasperfriend/packages?package_type=container" >> "$R" 2>&1
+          echo "" >> "$R"
+          echo "- GET /orgs|users package by name:" >> "$R"
+          curl -s -o /tmp/pkg.json -w "  HTTP %{http_code}\n" \
+            -H "Authorization: Bearer ${{ secrets.GITHUB_TOKEN }}" \
+            "https://api.github.com/users/kasperfriend/packages/container/wotlkclassic-trinity-docker" >> "$R" 2>&1
+          head -c 400 /tmp/pkg.json >> "$R" 2>/dev/null; echo >> "$R"
+          echo "- ghcr.io tags/list:" >> "$R"
+          curl -s -o /tmp/t.json -w "  HTTP %{http_code}\n" \
+            "https://ghcr.io/v2/kasperfriend/wotlkclassic-trinity-docker/tags/list" >> "$R" 2>&1
+          cat /tmp/t.json >> "$R" 2>/dev/null; echo >> "$R"
+          echo '```' >> "$R"
+
+      - name: Publish report
         if: always()
         shell: bash
         run: |
-          [ -f ci-build-report.md ] || echo "no build report" > ci-build-report.md
+          [ -f ci-verify-report.md ] || echo "no report produced" > ci-verify-report.md
+          echo "=== REPORT ==="; cat ci-verify-report.md
           git config user.name  "arena-diagnostic[bot]"
           git config user.email "arena-diagnostic[bot]@users.noreply.github.com"
-          git add ci-build-report.md
-          git commit -m "ci: build report (unfixed)" || echo "nothing to commit"
+          git add ci-verify-report.md
+          git commit -m "ci: verification report" || echo "nothing to commit"
           git pull --rebase origin "$GITHUB_REF_NAME" || true
           git push origin "HEAD:$GITHUB_REF_NAME"

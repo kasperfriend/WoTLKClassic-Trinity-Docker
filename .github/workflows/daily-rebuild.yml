@@ -137,11 +137,21 @@ jobs:
             done
             echo "ALL_BINARIES_LINK_OK"'
           echo "== checking binaries run (no DB, must print banner) =="
-          OUT="$(docker run --rm --network none \
+          # Logger.root in the .dist conf is 3 (Warning), which hides the INFO
+          # banner — raise it through the core's env override so the banner is
+          # actually emitted. The override key is UPPER_SNAKE_CASE:
+          # "Logger.root" -> TC_LOGGER_ROOT (see src/common/Configuration/Config.cpp).
+          OUT="$(docker run --rm --network none -e "TC_LOGGER_ROOT=4,Console" \
                   --entrypoint /opt/tc/bin/bnetserver "$IMAGE" \
                   -c /opt/tc/etc/bnetserver.conf.dist 2>&1 | head -40)" || true
           echo "$OUT"
-          echo "$OUT" | grep -qiE "bnetserver|TrinityCore" \
+          # Guard against the old false positive: a dynamic-loader error message
+          # contains the path "/opt/tc/bin/bnetserver", so grepping for
+          # "bnetserver" alone "passes" even when the binary never ran.
+          if echo "$OUT" | grep -qE "error while loading shared libraries|cannot open shared object file"; then
+            echo "bnetserver failed in the dynamic loader — see output above"; exit 1
+          fi
+          echo "$OUT" | grep -qF "<Ctrl-C> to stop." \
             || { echo "bnetserver did not print its banner"; exit 1; }
           echo "SMOKE_OK"
 

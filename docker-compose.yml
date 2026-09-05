@@ -31,9 +31,12 @@ services:
       start_period: 60s
 
   bnetserver:
-    # Daily-built image from GitHub Actions — set SERVER_IMAGE in .env
-    image: ${SERVER_IMAGE:-ghcr.io/your-github-username/trinitycore-3.4.3:latest}
-    # Fallback: build locally from this repo when the image is missing
+    # Default: a LOCAL image name, so `docker compose up` always builds from
+    # this repo and never depends on a registry you may not have access to.
+    # Set SERVER_IMAGE in .env to the daily GHCR build to pull instead:
+    #   SERVER_IMAGE=ghcr.io/<owner>/<repo>:latest
+    image: ${SERVER_IMAGE:-trinitycore-3.4.3:local}
+    # Built from this repo when the image is missing locally
     build: .
     command: ["bnetserver"]
     environment: &dbenv
@@ -68,7 +71,7 @@ services:
       start_period: 90s
 
   worldserver:
-    image: ${SERVER_IMAGE:-ghcr.io/your-github-username/trinitycore-3.4.3:latest}
+    image: ${SERVER_IMAGE:-trinitycore-3.4.3:local}
     build: .
     command: ["worldserver"]
     environment: *dbenv
