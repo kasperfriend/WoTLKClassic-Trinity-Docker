@@ -300,5 +300,45 @@ if [ "$SERVER" = "worldserver" ]; then
   replace "HotfixDatabaseInfo"    "HotfixDatabaseInfo    = \"$(db_info hotfixes)\""
 fi
 
+# ============================================================================
+# 6b. Client data preflight (worldserver only)
+#
+#     worldserver hard-exit()s deep in its startup when client data is
+#     missing ("Unable to load map and vmap data for starting zones",
+#     "Some required *.txt GameTable files not found", ...) and Docker's
+#     restart policy then loops it forever. Check up front and print one
+#     actionable message instead.
+# ============================================================================
+if [ "$SERVER" = "worldserver" ]; then
+  DATA_DIR="${TC_DATA_DIR:-/opt/tc/data}"
+  missing=""
+  for d in dbc maps vmaps mmaps gt; do
+    # -z: present but empty counts as missing (an empty bind-mounted ./data)
+    if [ ! -d "$DATA_DIR/$d" ] || [ -z "$(ls -A "$DATA_DIR/$d" 2>/dev/null)" ]; then
+      missing="$missing $d"
+    fi
+  done
+  if [ -n "$missing" ]; then
+    echo
+    warn "client data is missing or empty in ./data :$missing"
+    log  ">>> worldserver cannot start without it. Extract it from a 3.4.3 client:"
+    log  ">>>     ./helpers/extract-data.sh /path/to/3.4.3/client"
+    log  ">>>     docker compose restart worldserver"
+    log  ">>> (bnetserver is already running — you can create accounts meanwhile.)"
+    log  ">>> Waiting for ./data to be populated (checking every 60 s) ..."
+    while :; do
+      still=""
+      for d in dbc maps vmaps mmaps gt; do
+        if [ ! -d "$DATA_DIR/$d" ] || [ -z "$(ls -A "$DATA_DIR/$d" 2>/dev/null)" ]; then
+          still="$still $d"
+        fi
+      done
+      [ -z "$still" ] && break
+      sleep 60
+    done
+    log "client data found — continuing."
+  fi
+fi
+
 log "starting ${SERVER} ..."
 exec "$BIN_DIR/$SERVER" -c "$conf_target"

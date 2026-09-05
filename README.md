@@ -108,20 +108,33 @@ docker compose restart worldserver
 The script runs `mapextractor`, `vmap4extractor`, `vmap4assembler` and
 `mmaps_generator` inside the image (you can also run them by hand with
 `docker run --rm -it --entrypoint bash <image>`), then moves `dbc/`,
-`maps/`, `vmaps/`, `mmaps/` into `./data/`, which is mounted into both
-servers at `/opt/tc/data`.
+`maps/`, `vmaps/`, `mmaps/`, `gt/` and `cameras/` into `./data/`, which is
+mounted into both servers at `/opt/tc/data`.
+
+Expect this to take a few hours (`mmaps_generator` is the slow part) and
+~15–25 GB of free disk. **All six folders matter** — worldserver refuses to
+start without `dbc/`, `maps/`, `vmaps/`, `mmaps/` *and* `gt/`. Until they are
+there, the worldserver container prints what is missing and waits, re-checking
+every 60 s, so you can extract while the stack is already up — no restart
+needed, though `docker compose restart worldserver` is fine too.
 
 ### 5. Create an account & log in
 
+Accounts are created on the **worldserver** console (`bnetserver` has no
+console). A Battle.net account name must be an e-mail-style name containing
+`@`:
+
 ```bash
-docker attach wow343-bnetserver-1     # attach to the logon server console
-account create myuser mypass
-# detach with Ctrl-P Ctrl-Q
+docker attach wow343-worldserver-1    # attach to the world server console
+bnetaccount create myuser@local mypass
+# detach with Ctrl-P Ctrl-Q  (Ctrl-C would stop the server)
 ```
+
+That also creates the game account `myuser@local#1` for you.
 
 * Client: edit the client's `realmlist.wtf` → `set realmlist 127.0.0.1`
   (the client talks to the logon server on port 1119) and log in with
-  `myuser` / `mypass`.
+  `myuser@local` / `mypass`.
 * For friends on your LAN set `REALM_ADDRESS` in `.env` to your LAN IP.
 
 ---
@@ -206,7 +219,7 @@ four on first `up`.
 
 | On your PC | In the container | What goes there |
 |---|---|---|
-| `./data` | `/opt/tc/data` | Client data: `dbc/`, `maps/`, `vmaps/`, `mmaps/` (from `helpers/extract-data.sh`) |
+| `./data` | `/opt/tc/data` | Client data: `dbc/`, `maps/`, `vmaps/`, `mmaps/`, `gt/`, `cameras/` (from `helpers/extract-data.sh`) |
 | `./etc` | `/opt/tc/conf` | **`worldserver.conf` and `bnetserver.conf` — yours to edit** |
 | `./logs` | `/opt/tc/logs` | Server log files (`Worldserver.log`, `Bnet.log`, …) |
 | `./import/world` | `/opt/tc/import/world` | Your own `*.sql` dumps, imported on the next boot |
@@ -264,12 +277,14 @@ and the workflow builds that instead.
 | Symptom | Fix |
 |---|---|
 | worldserver logs `Waiting for import files` | world DB is empty — either let the DB bundle download (`AUTO_DOWNLOAD_DB=true`) or drop dumps into `./import/world/` |
-| `Missing maps/dbc/vmaps` on worldserver start | run `helpers/extract-data.sh` with your 3.4.3 client |
+| worldserver logs `client data is missing or empty in ./data` | run `helpers/extract-data.sh` with your 3.4.3 client; the container picks the data up on its own within 60 s |
+| `Some required *.txt GameTable files not found` | `./data/gt` is missing — re-run the extractor (older versions of the helper script did not copy `gt/`) |
+| `Unable to load map and vmap data for starting zones` | `./data/maps` or `./data/vmaps` is incomplete — re-run the extractor |
 | First worldserver boot takes very long | normal — full world DB import, one time (10–30 min) |
 | DB connection errors | MySQL still starting (healthcheck gates startup) or wrong `MYSQL_ROOT_PASSWORD` after first boot — delete the `mysql-data` volume to reset |
 | GHCR pull denied / `manifest unknown` / `NAME_UNKNOWN` | the package is private (GHCR's default) → make it public, or `docker login ghcr.io` first |
 | `error while loading shared libraries: libmysqlclient.so.21` | you are on an image built before the runtime `libmysqlclient21` dependency was added — rebuild (`docker compose build --pull`) |
-| Want to attach consoles | `docker attach wow343-worldserver-1` / `wow343-bnetserver-1` (Ctrl-P Ctrl-Q to detach) |
+| Want to attach consoles | `docker attach wow343-worldserver-1` (Ctrl-P Ctrl-Q to detach; bnetserver has no console) |
 
 ## Credits & license
 

@@ -36,20 +36,31 @@ docker run --rm \
   -w /client \
   --entrypoint /bin/bash \
   "$IMAGE" -euo pipefail -c '
-    echo "--- mapextractor (dbc + maps)"
+    echo "--- mapextractor (dbc + maps + cameras + gt)"
     /opt/tc/bin/mapextractor
-    echo "--- vmap4extractor"
+    echo "--- vmap4extractor (raw model data -> ./Buildings)"
+    # It refuses to start if ./Buildings already holds dir/dir_bin from a
+    # previous, possibly aborted run.
+    rm -rf ./Buildings
     /opt/tc/bin/vmap4extractor
-    echo "--- vmap4assembler"
-    /opt/tc/bin/vmap4assembler .
-    echo "--- mmaps_generator"
+    echo "--- vmap4assembler (./Buildings -> ./vmaps)"
+    # ARGV: <raw data dir> <vmap dest dir>. vmap4extractor writes its raw
+    # output to ./Buildings, so that — not "." — is the source directory.
+    rm -rf ./vmaps
+    /opt/tc/bin/vmap4assembler Buildings vmaps
+    echo "--- mmaps_generator (needs ./maps + ./vmaps in the cwd)"
     /opt/tc/bin/mmaps_generator
     echo "--- all tools finished"
+    # The raw intermediate is ~10 GB and is not needed by the server.
+    rm -rf ./Buildings
 '
 
 echo "== copying results into ./data =="
 mkdir -p data
-for d in dbc maps vmaps mmaps; do
+# gt/ is MANDATORY: worldserver aborts with "Some required *.txt GameTable
+# files not found" without it. cameras/ is optional (cinematics only) but
+# tiny, so it comes along too.
+for d in dbc maps vmaps mmaps cameras gt; do
   if [ -d "$CLIENT/$d" ]; then
     rm -rf "data/$d"
     mv "$CLIENT/$d" "data/$d"
