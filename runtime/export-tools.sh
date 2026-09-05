@@ -27,7 +27,9 @@ set -u
 DEST="${EXPORT_DIR:-/export}"
 BIN_DIR="${TC_BIN_DIR:-/opt/tc/bin}"
 TOOLS="mapextractor vmap4extractor vmap4assembler mmaps_generator"
-IMAGE_REF="${SERVER_IMAGE_REF:-trinitycore-3.4.3:local}"
+# Baked into the launchers when compose does not pass one: the public CI image,
+# which is what docker-compose.yml defaults to.
+IMAGE_REF="${SERVER_IMAGE_REF:-ghcr.io/kasperfriend/wotlkclassic-trinity-docker:latest}"
 
 log() { echo "[export-tools] $*"; }
 
@@ -111,10 +113,69 @@ cat > "$DEST/extract-data.sh" <<EXTRACTSH
 # ==========================================================================
 set -euo pipefail
 
-IMAGE="\${SERVER_IMAGE:-$IMAGE_REF}"
+# Which image to run the tools in when this host cannot execute them
+# natively: environment first, then ./.env, then the value baked at export.
+BAKED_IMAGE="$IMAGE_REF"
+IMAGE="\${SERVER_IMAGE:-}"
 EXTRACTSH
 cat >> "$DEST/extract-data.sh" <<'EXTRACTSH'
 HERE="$(cd "$(dirname "$0")" && pwd)"
+
+if [ -z "$IMAGE" ] && [ -f "$HERE/.env" ]; then
+  IMAGE="$(sed -n 's/^[[:space:]]*SERVER_IMAGE[[:space:]]*=[[:space:]]*//p' "$HERE/.env" \
+            | tail -n1 | sed -e 's/[[:space:]]*#.*$//' -e 's/^"\(.*\)"$/\1/' -e "s/^'\(.*\)'$/\1/")"
+fi
+[ -n "$IMAGE" ] || IMAGE="$BAKED_IMAGE"
+
+# ---------------------------------------------------------------------------
+# `docker run` pulls anything it does not have locally, and a plain name like
+# trinitycore-3.4.3:local is not on any registry — Docker Hub then answers
+#   pull access denied for trinitycore-3.4.3, repository does not exist or
+#   may require 'docker login'
+# So: look at the local image cache first and never start a blind pull for a
+# local-only name. Registry names (ghcr.io/..., localhost:5000/...) are pulled.
+# ---------------------------------------------------------------------------
+ensure_image() {
+  docker version >/dev/null 2>&1 \
+    || { echo "ERROR: the Docker engine is not reachable — start Docker Desktop (or the docker daemon) and re-run."; exit 1; }
+  docker image inspect "$IMAGE" >/dev/null 2>&1 && return 0
+
+  case "$IMAGE" in
+    *.*/*|*:*/*)                                   # <host>[:port]/name → a registry
+      echo "   '$IMAGE' is not cached yet — pulling it"
+      docker pull "$IMAGE" && return 0
+      echo
+      echo "ERROR: could not pull '$IMAGE'."
+      echo "       A public GHCR package needs no login at all, so this is normally"
+      echo "       no internet, a typo in the name, or a PRIVATE package — a fork's"
+      echo "       new package starts out private: make it Public (Packages → the"
+      echo "       package → Change visibility), or run 'docker login ${IMAGE%%/*}'."
+      ;;
+    *)
+      echo
+      echo "ERROR: this Docker engine has no image named '$IMAGE'."
+      echo "       That is a local-only name — no registry serves it, so Docker"
+      echo "       cannot download it (hence 'pull access denied for ${IMAGE%%:*}')."
+      ;;
+  esac
+
+  echo
+  echo "   Two ways forward:"
+  echo "     a) build this repo's image once:   docker compose build   (25-45 min)"
+  echo "     b) drop the SERVER_IMAGE override — the compose default is the public"
+  echo "        prebuilt image: ghcr.io/<owner>/<repo>:latest with SERVER_PULL_POLICY=missing"
+  echo
+  if [ -t 0 ] && [ -f "$HERE/docker-compose.yml" ]; then
+    printf "   Build it now? [y/N] "
+    read -r ans
+    case "$ans" in
+      [yY]*) ( cd "$HERE" && docker compose build ) || { echo "ERROR: the build failed."; exit 1; } ;;
+      *)     exit 1 ;;
+    esac
+  else
+    exit 1
+  fi
+}
 
 CLIENT="${1:-}"
 if [ -z "$CLIENT" ]; then
@@ -143,6 +204,7 @@ if [ "$NATIVE" = yes ]; then
   run() { ( cd "$CLIENT" && LD_LIBRARY_PATH="$HERE/tools/lib" "$HERE/tools/$1" "${@:2}" ); }
 else
   command -v docker >/dev/null 2>&1 || { echo "ERROR: these binaries can't run on this host and docker is not installed."; exit 1; }
+  ensure_image
   run() { docker run --rm -v "$CLIENT:/client" -w /client --entrypoint "/opt/tc/bin/$1" "$IMAGE" "${@:2}"; }
 fi
 
@@ -201,9 +263,20 @@ cat <<EXTRACTBAT
 @echo off
 setlocal enabledelayedexpansion
 title WoW 3.4.3 - Extract client data
-if "%SERVER_IMAGE%"=="" set "SERVER_IMAGE=$IMAGE_REF"
+set "BAKED_IMAGE=$IMAGE_REF"
 EXTRACTBAT
 cat <<'EXTRACTBAT'
+
+rem  Which image do the servers run? Precedence: (1) SERVER_IMAGE in this
+rem  shell, (2) the .env file, (3) the value baked in at export time.
+rem  Double-clicking does not read .env, so load the line here - otherwise this
+rem  launcher would drive a different image than the stack actually runs.
+if "%SERVER_IMAGE%"=="" (
+  if exist "%~dp0.env" for /f "usebackq tokens=1,* delims==" %%A in (`findstr /B /C:"SERVER_IMAGE=" "%~dp0.env"`) do set "SERVER_IMAGE=%%B"
+)
+if "%SERVER_IMAGE%"=="" set "SERVER_IMAGE=%BAKED_IMAGE%"
+rem  strip quotes an editor may have left in .env (%..":"=% removes every ")
+set "SERVER_IMAGE=%SERVER_IMAGE:"=%"
 
 rem ==========================================================================
 rem  Extract client data from a WoW 3.4.3 client.  GENERATED by the
@@ -236,6 +309,49 @@ if errorlevel 1 (
   echo  ERROR: Docker is not running. Start Docker Desktop and try again.
   goto :fail
 )
+
+rem  The tools run INSIDE the image, so it has to be in the local Docker
+rem  cache first. Never let `docker run` discover that on its own: it answers a
+rem  missing local name with "pull access denied for trinitycore-3.4.3,
+rem  repository does not exist or may require 'docker login'", which reads like
+rem  a credentials problem and is not one. Registry names (with a slash) are
+rem  pulled; anything else goes straight to "build it".
+docker image inspect "%SERVER_IMAGE%" >nul 2>&1
+if not errorlevel 1 goto :image_ready
+echo(
+echo  This Docker engine has no image named "%SERVER_IMAGE%" yet.
+echo(
+echo "%SERVER_IMAGE%" | find "/" >nul
+if errorlevel 1 goto :no_registry_name
+echo  Pulling it (a public GHCR package needs no login)...
+docker pull "%SERVER_IMAGE%"
+if not errorlevel 1 goto :image_ready
+echo(
+echo  The pull failed. A public package needs no credentials, so this is
+echo  usually no internet, a typo, or a PRIVATE package - a fork's new
+echo  package starts out private: make it Public under Packages, or run
+echo      docker login ghcr.io
+goto :offer_build
+
+:no_registry_name
+echo  That is a local-only name: no registry serves it, so Docker cannot
+echo  download it - and "pull access denied for %SERVER_IMAGE%" is Docker
+echo  saying "not built here", not "wrong password". It only exists once this
+echo  repo has built it.
+
+:offer_build
+echo(
+choice /C YN /M "Build it now - 25-45 minutes, only the first time"
+if errorlevel 2 (
+  echo(
+  echo  Not building. Either run "docker compose build" yourself, or delete the
+  echo  SERVER_IMAGE line from .env so the stack uses the public prebuilt image.
+  goto :fail
+)
+echo(
+docker compose --project-directory "%~dp0." build
+if errorlevel 1 goto :fail
+:image_ready
 
 echo(
 echo  Client: %CLIENT%

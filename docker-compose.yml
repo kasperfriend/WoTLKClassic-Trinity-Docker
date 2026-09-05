@@ -4,10 +4,28 @@
 #    bnetserver  : logon server        -> ports 1119 (bnet) + 8081 (REST)
 #    worldserver : game server         -> port 8085
 #
+#  Where the image comes from:
+#    Default = the PUBLIC prebuilt image built by this repo's Actions workflow:
+#        ghcr.io/kasperfriend/wotlkclassic-trinity-docker:latest
+#    so `up -d` downloads it and starts — no docker login, no compiling.
+#    `pull_policy: missing` pulls it only when it isn't cached, and the
+#    `build:` section stays as the safety net: if the pull cannot happen
+#    (offline, registry hiccup, or you pointed SERVER_IMAGE at a local name)
+#    Compose compiles the same image from this Dockerfile instead.
+#
+#  Prefer to compile it yourself (own fork of the core, own source commit,
+#  air-gapped host)? Put BOTH lines in .env:
+#      SERVER_IMAGE=trinitycore-3.4.3:local
+#      SERVER_PULL_POLICY=never      # a plain name is not on any registry —
+#                                    # without this, Compose asks Docker Hub
+#                                    # and you get "pull access denied for
+#                                    # trinitycore-3.4.3, repository does not
+#                                    # exist or may require 'docker login'"
+#
 #  Workflow (once):
-#    1. docker compose up -d          builds, starts, creates + imports the
-#                                     DBs (10–30 min), and drops the
-#                                     extractors into the repo root
+#    1. docker compose up -d          pulls the image, starts, creates +
+#                                     imports the DBs (10–30 min), and drops
+#                                     the extractors into the repo root
 #    2. ./extract-data.sh <client>    extract client data (Windows: .bat)
 #    3. ./data                        where the extracted folders land
 #                                     (dbc maps vmaps mmaps gt cameras)
@@ -15,6 +33,9 @@
 #
 #  Afterwards: docker compose up -d starts everything in seconds.
 #  Watch the first boot with: docker compose logs -f worldserver
+#  In doubt about any of this: ./doctor.sh — it checks the image and whether it
+#  is anonymously pullable, the data, the launchers, the ports and the
+#  first-run downloads.
 # ============================================================================
 name: wow343
 
@@ -38,15 +59,28 @@ services:
       start_period: 60s
 
   bnetserver:
-    # Default: a LOCAL image name, so `docker compose up` always builds from
-    # this repo and never depends on a registry you may not have access to.
-    # To pull the CI build instead, set SERVER_IMAGE in .env to the GHCR name
-    # the workflow actually publishes — ghcr.io/<owner>/<repo-in-lowercase>:
-    #   SERVER_IMAGE=ghcr.io/kasperfriend/wotlkclassic-trinity-docker:latest
-    # (that package must be Public, or the host must `docker login ghcr.io`)
-    image: ${SERVER_IMAGE:-trinitycore-3.4.3:local}
-    # Built from this repo when the image is missing locally
-    build: .
+    # Public CI image — anyone can pull it without `docker login`.
+    # Set SERVER_IMAGE in .env to your own path (a fork's workflow publishes
+    # ghcr.io/<owner>/<repo-in-lowercase>) or to a local name to compile here.
+    image: ${SERVER_IMAGE:-ghcr.io/kasperfriend/wotlkclassic-trinity-docker:latest}
+    # pull_policy, per SERVER_IMAGE type:
+    #   ghcr.io/<owner>/<repo>:latest  →  `missing` (default): use the cached
+    #       image, pull when it isn't cached; `docker compose pull` refreshes.
+    #   trinitycore-3.4.3:local        →  pair it with `never`: a plain name is
+    #       not on any registry, and looking it up is what produces
+    #       "pull access denied for trinitycore-3.4.3, repository does not exist"
+    # always = pull on every up. If a pull fails while `build` is available,
+    # Compose compiles this Dockerfile instead — nothing is ever just stuck.
+    build: &tcbuild
+      context: .
+      # Everything the Dockerfile can be pointed at, without hand-running
+      # `docker build`: set these in .env if upstream ever moves.
+      args:
+        SOURCE_REPO: ${SOURCE_REPO:-https://github.com/xHashii/3.4.3_Source.git}
+        SOURCE_BRANCH: ${SOURCE_BRANCH:-main}
+        SOURCE_SHA: ${SOURCE_SHA:-}
+        UBUNTU_VERSION: ${UBUNTU_VERSION:-24.04}
+    pull_policy: ${SERVER_PULL_POLICY:-missing}
     command: ["bnetserver"]
     environment: &dbenv
       MYSQL_HOST: mysql
@@ -55,6 +89,10 @@ services:
       MYSQL_PASSWORD: ${MYSQL_ROOT_PASSWORD:-wow}
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-wow}
       AUTO_DOWNLOAD_DB: ${AUTO_DOWNLOAD_DB:-true}
+      # Where the world/auth/characters dump comes from. Empty = the entrypoint
+      # default (the upstream `databases` release); override in .env if that
+      # release ever moves.
+      DB_URL: ${DB_URL:-}
       REALM_NAME: ${REALM_NAME:-TrinityCore 3.4.3}
       REALM_ADDRESS: ${REALM_ADDRESS:-127.0.0.1}
       TZ: ${TZ:-Europe/Kiev}
@@ -81,8 +119,9 @@ services:
       start_period: 90s
 
   worldserver:
-    image: ${SERVER_IMAGE:-trinitycore-3.4.3:local}
-    build: .
+    image: ${SERVER_IMAGE:-ghcr.io/kasperfriend/wotlkclassic-trinity-docker:latest}
+    build: *tcbuild        # same image, same build args as bnetserver
+    pull_policy: ${SERVER_PULL_POLICY:-missing}
     command: ["worldserver"]
     environment: *dbenv
     ports:
@@ -109,13 +148,14 @@ services:
   # again. Exits immediately; `up -d` does not wait for it.
   # --------------------------------------------------------------------------
   extractors:
-    image: ${SERVER_IMAGE:-trinitycore-3.4.3:local}
-    build: .
+    image: ${SERVER_IMAGE:-ghcr.io/kasperfriend/wotlkclassic-trinity-docker:latest}
+    build: *tcbuild
+    pull_policy: ${SERVER_PULL_POLICY:-missing}
     entrypoint: ["/usr/local/bin/export-tools.sh"]
     environment:
       EXPORT_DIR: /export
       # Baked into the generated launchers so they drive the same image.
-      SERVER_IMAGE_REF: ${SERVER_IMAGE:-trinitycore-3.4.3:local}
+      SERVER_IMAGE_REF: ${SERVER_IMAGE:-ghcr.io/kasperfriend/wotlkclassic-trinity-docker:latest}
     volumes:
       # The repo root itself — this is what lets the service write
       # ./tools, ./extract-data.sh and ./extract-data.bat next to this file.
