@@ -5,3 +5,7 @@
 # CRLF scripts and the shebang line would fail with "bad interpreter".
 *.sh text eol=lf
 Dockerfile text eol=lf
+
+# Batch files run on Windows hosts — keep them CRLF (the generated
+# extract-data.bat is written with CRLF for the same reason).
+*.bat text eol=crlf
