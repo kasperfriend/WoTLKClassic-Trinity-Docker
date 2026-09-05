@@ -12,7 +12,7 @@
 #               can apply sql/updates on startup)
 #
 #  The upstream commit that gets built can be pinned from CI via
-#  SOURCE_SHA (see .github/workflows/daily-rebuild.yml). Locally, a plain
+#  SOURCE_SHA (see .github/workflows/poll-and-build.yml). Locally, a plain
 #  `docker build .` always builds the latest upstream main branch.
 # ============================================================================
 
@@ -81,6 +81,11 @@ FROM ubuntu:${UBUNTU_VERSION}
 
 ARG DEBIAN_FRONTEND=noninteractive
 
+# NOTE: libmysqlclient21 is NOT optional — the builder's default-libmysqlclient-dev
+# links worldserver/bnetserver against libmysqlclient.so.21 (see the core's
+# cmake/macros/FindMySQL.cmake, which resolves `mysql_config --libs_r`).
+# libmariadb3 only provides libmariadb.so.3, so without it both servers die at
+# the dynamic loader with "error while loading shared libraries".
 RUN apt-get update \
  && apt-get install -y --no-install-recommends \
       bash \
@@ -94,6 +99,7 @@ RUN apt-get update \
       libboost-system1.83.0 \
       libboost-thread1.83.0 \
       libmariadb3 \
+      libmysqlclient21 \
       libreadline8t64 \
       libssl3t64 \
       mariadb-client \
@@ -113,10 +119,11 @@ COPY --from=builder /src/src/server/bnetserver/bnetserver.key.pem /opt/tc/etc/
 COPY runtime/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY runtime/healthcheck.sh /usr/local/bin/healthcheck.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/healthcheck.sh \
- && mkdir -p /opt/tc/data /opt/tc/logs /opt/tc/import/world
+ && mkdir -p /opt/tc/data /opt/tc/logs /opt/tc/import/world /opt/tc/conf
 
 ENV TZ=UTC \
     AUTO_DOWNLOAD_DB=true \
+    TC_CONF_DIR=/opt/tc/conf \
     REALM_NAME="TrinityCore 3.4.3" \
     REALM_ADDRESS=127.0.0.1
 

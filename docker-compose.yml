@@ -31,9 +31,14 @@ services:
       start_period: 60s
 
   bnetserver:
-    # Daily-built image from GitHub Actions — set SERVER_IMAGE in .env
-    image: ${SERVER_IMAGE:-ghcr.io/kasperfriend/trinitycore-3.4.3:latest}
-    # Fallback: build locally from this repo when the image is missing
+    # Default: a LOCAL image name, so `docker compose up` always builds from
+    # this repo and never depends on a registry you may not have access to.
+    # To pull the CI build instead, set SERVER_IMAGE in .env to the GHCR name
+    # the workflow actually publishes — ghcr.io/<owner>/<repo-in-lowercase>:
+    #   SERVER_IMAGE=ghcr.io/kasperfriend/wotlkclassic-trinity-docker:latest
+    # (that package must be Public, or the host must `docker login ghcr.io`)
+    image: ${SERVER_IMAGE:-trinitycore-3.4.3:local}
+    # Built from this repo when the image is missing locally
     build: .
     command: ["bnetserver"]
     environment: &dbenv
@@ -50,9 +55,10 @@ services:
       - "1119:1119"   # battle.net logon protocol
       - "8081:8081"   # login REST service
     volumes: &vol
-      - ./data:/opt/tc/data
-      - ./logs:/opt/tc/logs
-      - ./import:/opt/tc/import
+      - ./data:/opt/tc/data     # dbc / maps / vmaps / mmaps (client data)
+      - ./logs:/opt/tc/logs     # server log files
+      - ./import:/opt/tc/import # drop *.sql dumps into ./import/world
+      - ./etc:/opt/tc/conf      # worldserver.conf / bnetserver.conf — editable
     depends_on:
       mysql:
         condition: service_healthy
@@ -68,7 +74,7 @@ services:
       start_period: 90s
 
   worldserver:
-    image: ${SERVER_IMAGE:-ghcr.io/kasperfriend/trinitycore-3.4.3:latest}
+    image: ${SERVER_IMAGE:-trinitycore-3.4.3:local}
     build: .
     command: ["worldserver"]
     environment: *dbenv

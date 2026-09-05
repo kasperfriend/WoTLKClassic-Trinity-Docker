@@ -1,8 +1,7 @@
 # ============================================================================
 #  Poll upstream & build — checks xHashii/3.4.3_Source every 15 minutes for
 #  a commit that hasn't been built yet, and only builds/pushes when one shows
-#  up. No fixed daily time, no DST handling needed — replaces the old
-#  schedule-based daily-rebuild.yml.
+#  up. No fixed daily time and no DST handling needed.
 #
 #  How "already built?" is decided: it asks GHCR directly whether an image
 #  tagged sha-<short-commit> already exists. If it does, this exact commit
@@ -122,11 +121,13 @@ jobs:
       # ------------------------------------------------------------------
       # Smoke test the freshly built image
       # ------------------------------------------------------------------
-      - name: Smoke test (link check + banner)
+      - name: Smoke test (link check + live bnetserver)
         if: steps.check.outputs.new == 'true'
         run: |
           IMAGE="${{ steps.img.outputs.image }}:latest"
-          echo "== checking dynamic libraries =="
+          docker pull "$IMAGE"
+
+          echo "== 1. every binary resolves its shared libraries =="
           docker run --rm --network none --entrypoint /bin/bash "$IMAGE" -c '
             set -e
             for b in /opt/tc/bin/*; do
@@ -135,13 +136,34 @@ jobs:
               fi
             done
             echo "ALL_BINARIES_LINK_OK"'
-          echo "== checking binaries run (no DB, must print banner) =="
-          OUT="$(docker run --rm --network none \
-                  --entrypoint /opt/tc/bin/bnetserver "$IMAGE" \
-                  -c /opt/tc/etc/bnetserver.conf.dist 2>&1 | head -40)" || true
+
+          echo "== 2. the server binary actually executes =="
+          # --version prints the build string and exits before any DB/TLS work.
+          # Grepping the *old* way ("bnetserver|TrinityCore") was a false pass:
+          # a dynamic-loader error message contains "/opt/tc/bin/bnetserver".
+          OUT="$(docker run --rm --network none --entrypoint /opt/tc/bin/bnetserver "$IMAGE" --version 2>&1)" || true
           echo "$OUT"
-          echo "$OUT" | grep -qiE "bnetserver|TrinityCore" \
-            || { echo "bnetserver did not print its banner"; exit 1; }
+          if echo "$OUT" | grep -qE "error while loading shared libraries|cannot open shared object file"; then
+            echo "bnetserver failed in the dynamic loader"; exit 1
+          fi
+          echo "$OUT" | grep -q "rev\." || { echo "bnetserver printed no version string"; exit 1; }
+
+          echo "== 3. live stack: MySQL + bnetserver through docker-compose =="
+          # AUTO_DOWNLOAD_DB=false keeps this fast: the entrypoint creates the
+          # databases, imports the base auth/characters schemas, renders
+          # bnetserver.conf and starts the server. "healthy" means
+          # healthcheck.sh found the process AND port 1119 listening.
+          AUTO_DOWNLOAD_DB=false SERVER_IMAGE="$IMAGE" docker compose up -d --no-build mysql bnetserver
+          H=missing
+          for _ in $(seq 1 36); do
+            H="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' wow343-bnetserver-1 2>/dev/null || echo missing)"
+            echo "  bnetserver health: $H"
+            [ "$H" = healthy ] && break
+            sleep 5
+          done
+          docker logs --tail 20 wow343-bnetserver-1 2>&1 | tr -d '\000' || true
+          docker compose down -v >/dev/null 2>&1 || true
+          [ "$H" = healthy ] || { echo "bnetserver never became healthy"; exit 1; }
           echo "SMOKE_OK"
 
       # ------------------------------------------------------------------

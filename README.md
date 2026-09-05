@@ -1,6 +1,6 @@
-# TrinityCore 3.4.3 (WotLK Classic) — Docker + Daily Rebuild
+# TrinityCore 3.4.3 (WotLK Classic) — Docker + Auto-Rebuild
 
-[![daily-rebuild](https://github.com/YOUR_GITHUB_USERNAME/trinitycore-3.4.3-docker/actions/workflows/daily-rebuild.yml/badge.svg)](https://github.com/YOUR_GITHUB_USERNAME/trinitycore-3.4.3-docker/actions/workflows/daily-rebuild.yml)
+[![poll-and-build](https://github.com/kasperfriend/WoTLKClassic-Trinity-Docker/actions/workflows/poll-and-build.yml/badge.svg)](https://github.com/kasperfriend/WoTLKClassic-Trinity-Docker/actions/workflows/poll-and-build.yml)
 
 A self-rebuilding Docker distribution of the
 **[xHashii/3.4.3_Source](https://github.com/xHashii/3.4.3_Source)** World of
@@ -8,8 +8,8 @@ Warcraft 3.4.3 (WotLK Classic) server (TrinityCore-based).
 
 * **Builds** `worldserver`, `bnetserver` and the map/vmap/mmap extractor
   tools from the upstream source — in Docker, on every run.
-* **Rebuilds daily at 06:00 Europe/Kiev** via GitHub Actions, always from
-  the latest upstream commit, and publishes the image to GHCR.
+* **Rebuilds itself** via GitHub Actions: polls upstream every 15 minutes and
+  builds + publishes to GHCR only when there is a commit it hasn't built yet.
 * **Runs the whole stack** with one command: MySQL 8 + logon server +
   world server, with databases created and populated automatically.
 
@@ -18,11 +18,11 @@ Warcraft 3.4.3 (WotLK Classic) server (TrinityCore-based).
 ## Repository layout
 
 ```
-trinitycore-3.4.3-docker/
+WoTLKClassic-Trinity-Docker/
 ├── Dockerfile                        # multi-stage: clone upstream → compile → slim runtime
 ├── docker-compose.yml                # mysql + bnetserver + worldserver stack
 ├── .env.example                      # copy to .env and edit
-├── .github/workflows/daily-rebuild.yml  # the 06:00 Europe/Kiev daily pipeline
+├── .github/workflows/poll-and-build.yml # polls upstream, builds only on new commits
 ├── runtime/
 │   ├── entrypoint.sh                 # DB wait → create DBs → import → render conf → start
 │   └── healthcheck.sh                # container health (process + port)
@@ -43,17 +43,19 @@ trinitycore-3.4.3-docker/
 
 ### 1. Get the image
 
-Either **pull the daily-built image** (after the first workflow run on your
-repo — see [Daily rebuild](#daily-rebuild-at-0600-europekiev)):
-
-```bash
-docker pull ghcr.io/YOUR_GITHUB_USERNAME/trinitycore-3.4.3:latest
-```
-
-…or **build it locally right now**:
+Either **build it locally right now** (the default — nothing else to do):
 
 ```bash
 docker build -t trinitycore-3.4.3:local .
+```
+
+…or **pull the CI-built image** from your GHCR once the workflow has run
+(see [Auto-rebuild](#auto-rebuild-poll-upstream-every-15-minutes) — the package
+has to be made **public** first, or the host pulling it must
+`docker login ghcr.io`):
+
+```bash
+docker pull ghcr.io/<your-github-username>/<your-repo>:latest
 ```
 
 > Build takes ~25–45 min on a typical 4-core machine. `SERVERS=ON`,
@@ -63,8 +65,11 @@ docker build -t trinitycore-3.4.3:local .
 
 ```bash
 cp .env.example .env
-# edit MYSQL_ROOT_PASSWORD and SERVER_IMAGE
+# edit MYSQL_ROOT_PASSWORD (and SERVER_IMAGE only if you use the GHCR image)
 ```
+
+`SERVER_IMAGE` defaults to `trinitycore-3.4.3:local`, so `docker compose up`
+builds from this repo and needs no registry access.
 
 ### 3. Start the stack
 
@@ -100,7 +105,7 @@ The world DB alone isn't enough — worldserver also needs data extracted
 docker compose restart worldserver
 ```
 
-The script runs `map_extractor`, `vmap4_extractor`, `vmap4_assembler` and
+The script runs `mapextractor`, `vmap4extractor`, `vmap4assembler` and
 `mmaps_generator` inside the image (you can also run them by hand with
 `docker run --rm -it --entrypoint bash <image>`), then moves `dbc/`,
 `maps/`, `vmaps/`, `mmaps/` into `./data/`, which is mounted into both
@@ -121,38 +126,54 @@ account create myuser mypass
 
 ---
 
-## Daily rebuild at 06:00 Europe/Kiev
+## Auto-rebuild: poll upstream every 15 minutes
 
-The included workflow (`.github/workflows/daily-rebuild.yml`) on your
+The included workflow (`.github/workflows/poll-and-build.yml`) on your
 GitHub repo:
 
-1. **Triggers every day at 06:00 Kyiv time.** GitHub cron is UTC and
-   Ukraine flips between UTC+2 and UTC+3, so the workflow registers both
-   `03:00` and `04:00` UTC and a guard step only lets the run continue
-   when the local Kyiv hour is really `06` — exact local time all year,
-   DST-proof.
-2. Resolves the **latest commit** of `xHashii/3.4.3_Source`.
+1. **Polls `xHashii/3.4.3_Source` every 15 minutes** (`*/15 * * * *`) and
+   resolves its latest commit.
+2. **Skips the build when that commit is already published** — it asks GHCR
+   whether `sha-<short-commit>` exists. If it does, the run exits doing
+   nothing, so the 96 runs a day cost almost nothing. Manual
+   (**Run workflow**) and `push`-to-`main` runs always rebuild.
 3. Builds the image from that exact commit (`SOURCE_SHA` build-arg → the
    clone is pinned, and the image is tagged `sha-<short>`).
 4. Pushes to **GHCR**:
    * `ghcr.io/<your-user>/<your-repo>:latest`
-   * `ghcr.io/<your-user>/<your-repo>:YYYY.MM.DD` (Kyiv date)
+   * `ghcr.io/<your-user>/<your-repo>:YYYY.MM.DD` (UTC date)
    * `ghcr.io/<your-user>/<your-repo>:sha-<upstream-short-sha>`
-5. **Smoke-tests** the image (all binaries link-check clean, bnetserver
-   prints its banner) and writes a job summary with the built commit.
+5. **Smoke-tests** the image: every binary link-checks clean,
+   `bnetserver --version` runs, and a real `mysql` + `bnetserver` stack is
+   brought up with `docker compose` and must reach *healthy* (process
+   running **and** port 1119 listening).
+
+> Adjust the cadence by editing the `cron:` line — `*/15` is a good default;
+> hourly (`0 * * * *`) is plenty if you don't need same-day upstream fixes.
 
 ### One-time setup
 
 1. Push this folder to a **new GitHub repository**.
 2. `Settings → Actions → General`: allow *Read and write* if your org
    restricts the default `GITHUB_TOKEN` (most personal repos need nothing).
-3. Push to `main` triggers a build immediately; afterwards it runs daily
-   at 06:00 Kyiv. You can always hit **Run workflow** for a manual build.
-4. Make the image pullable: your repo's **Packages** section → package
-   settings → *Change visibility → Public* (or keep it private and
-   `docker login ghcr.io` on hosts that pull it).
+3. Push to `main` triggers a build immediately; afterwards the poller runs
+   every 15 minutes. You can always hit **Run workflow** to force a build.
+4. **Make the image pullable — this step is mandatory if anyone but you should
+   pull it.** GHCR packages are **private by default**, so a fresh
+   `docker pull` fails with `denied`/`manifest unknown` until you go to your
+   repo's **Packages** section → package settings → *Change visibility →
+   Public*. (Or keep it private and `docker login ghcr.io` on every host that
+   pulls it.)
 5. Put `ghcr.io/<your-user>/<your-repo>:latest` into `SERVER_IMAGE` in
-   your `.env` and `docker compose up -d` uses the daily image.
+   your `.env` and `docker compose up -d` uses the CI-built image instead of
+   building locally.
+
+> **The image name follows the repository name:** it is
+> `ghcr.io/<owner>/<repo-in-lowercase>:latest`. Renaming the repo afterwards
+> does **not** rename a package that was already pushed — the old name keeps
+> working and the next build creates a *second* package under the new name
+> (which starts out **private**). Delete the stale package, or keep pulling the
+> old name.
 
 ---
 
@@ -161,7 +182,7 @@ GitHub repo:
 | Variable | Default | Purpose |
 |---|---|---|
 | `MYSQL_ROOT_PASSWORD` | `wow` | MySQL root + server DB credentials (**change it**) |
-| `SERVER_IMAGE` | `ghcr.io/.../trinitycore-3.4.3:latest` | image the compose stack runs |
+| `SERVER_IMAGE` | `trinitycore-3.4.3:local` | image the compose stack runs (built from this repo unless you point it at GHCR) |
 | `AUTO_DOWNLOAD_DB` | `true` | download the official DB bundle when `world` is empty |
 | `REALM_NAME` | `TrinityCore 3.4.3` | realm name in the client realm list |
 | `REALM_ADDRESS` | `127.0.0.1` | realm address clients connect to |
@@ -173,13 +194,66 @@ GitHub repo:
 database, everything else goes to `world`). Set `AUTO_DOWNLOAD_DB=false`
 to skip the automatic download entirely.
 
-**Ports:** `1119` (battle.net logon protocol), `8081` (login REST), `8085` (world) ·
-**Volumes:** `./data` → `/opt/tc/data`, `./logs` → `/opt/tc/logs`,
-`./import` → `/opt/tc/import`, named volume `mysql-data`.
+**Ports:** `1119` (battle.net logon protocol), `8081` (login REST), `8085` (world).
 
-> **Tip:** the core supports config overrides via environment variables —
-> prefix any `worldserver.conf` field with `TC_` (e.g. `TC_Updates.EnableDatabases`)
-> and add it to the compose `environment:` section to tweak without touching confs.
+---
+
+## Files on your PC (all four folders are bind-mounted)
+
+Everything you ever need to touch lives in the repo folder as an ordinary
+directory — no `docker cp`, no editing inside a container. Docker creates all
+four on first `up`.
+
+| On your PC | In the container | What goes there |
+|---|---|---|
+| `./data` | `/opt/tc/data` | Client data: `dbc/`, `maps/`, `vmaps/`, `mmaps/` (from `helpers/extract-data.sh`) |
+| `./etc` | `/opt/tc/conf` | **`worldserver.conf` and `bnetserver.conf` — yours to edit** |
+| `./logs` | `/opt/tc/logs` | Server log files (`Worldserver.log`, `Bnet.log`, …) |
+| `./import/world` | `/opt/tc/import/world` | Your own `*.sql` dumps, imported on the next boot |
+
+MySQL itself is a named volume (`mysql-data`), not a folder — dump it with
+`docker compose exec mysql mysqldump -uroot -p"$MYSQL_ROOT_PASSWORD" --all-databases`
+if you want a backup.
+
+### Editing the server configs
+
+`./etc/worldserver.conf` and `./etc/bnetserver.conf` are seeded from the
+upstream `.conf.dist` templates on **first run only**. After that the file is
+yours:
+
+```bash
+docker compose up -d            # first run seeds ./etc/*.conf
+nano etc/worldserver.conf       # change anything you like
+docker compose restart worldserver
+```
+
+* **Preserved across restarts:** every setting you edit — motd, rates,
+  `Logger.*`, `MaxPingTime`, `GameType`, anything.
+* **Re-applied on every boot:** only the four `*DatabaseInfo` lines
+  (`Login`/`World`/`Character`/`Hotfix`), because they are built from the
+  `MYSQL_*` variables in `.env`. Change the password in `.env` and the conf
+  follows automatically — don't hand-edit those lines.
+* **Reset to defaults:** delete the file and restart; it is re-seeded from the
+  template.
+* The pristine, fully commented templates stay inside the image at
+  `/opt/tc/etc/*.conf.dist` (`docker compose exec worldserver cat
+  /opt/tc/etc/worldserver.conf.dist`) — that is why the confs live in
+  `/opt/tc/conf` and not `/opt/tc/etc`: mounting over `/opt/tc/etc` would hide
+  the templates.
+
+> **Linux note:** the containers run as root, so files the server writes into
+> `./data` and `./logs` are root-owned — `sudo chown -R $USER ./data ./logs`
+> once if that bothers you. `./etc` is deliberately made world-writable
+> (directory *and* seeded files), because editors and `sed -i` save by
+> renaming a temp file and need write access on the directory itself — without
+> it you could not edit the confs without `sudo`.
+
+> **Tip:** the core supports config overrides via environment variables — any
+> `worldserver.conf` field can be set with a `TC_`-prefixed variable whose name is
+> the field in **UPPER_SNAKE_CASE** (`.` → `_`, camelCase split), e.g.
+> `Updates.EnableDatabases` → `TC_UPDATES_ENABLE_DATABASES`, `Logger.root` →
+> `TC_LOGGER_ROOT`. Add it to the compose `environment:` section to tweak without
+> touching confs. (Plain `TC_Updates.EnableDatabases` is *not* read.)
 
 **Building a fork instead:** the Dockerfile takes `SOURCE_REPO`,
 `SOURCE_BRANCH` and `SOURCE_SHA` build-args — point them at your own fork
@@ -193,7 +267,8 @@ and the workflow builds that instead.
 | `Missing maps/dbc/vmaps` on worldserver start | run `helpers/extract-data.sh` with your 3.4.3 client |
 | First worldserver boot takes very long | normal — full world DB import, one time (10–30 min) |
 | DB connection errors | MySQL still starting (healthcheck gates startup) or wrong `MYSQL_ROOT_PASSWORD` after first boot — delete the `mysql-data` volume to reset |
-| GHCR pull denied | package is private → make it public or `docker login ghcr.io` |
+| GHCR pull denied / `manifest unknown` / `NAME_UNKNOWN` | the package is private (GHCR's default) → make it public, or `docker login ghcr.io` first |
+| `error while loading shared libraries: libmysqlclient.so.21` | you are on an image built before the runtime `libmysqlclient21` dependency was added — rebuild (`docker compose build --pull`) |
 | Want to attach consoles | `docker attach wow343-worldserver-1` / `wow343-bnetserver-1` (Ctrl-P Ctrl-Q to detach) |
 
 ## Credits & license
