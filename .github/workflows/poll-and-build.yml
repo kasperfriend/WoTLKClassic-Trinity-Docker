@@ -1,0 +1,171 @@
+# ============================================================================
+#  Poll upstream & build — checks xHashii/3.4.3_Source every 15 minutes for
+#  a commit that hasn't been built yet, and only builds/pushes when one shows
+#  up. No fixed daily time, no DST handling needed — replaces the old
+#  schedule-based daily-rebuild.yml.
+#
+#  How "already built?" is decided: it asks GHCR directly whether an image
+#  tagged sha-<short-commit> already exists. If it does, this exact commit
+#  was already built and pushed, so the run exits early doing nothing. If it
+#  doesn't, it's a new commit and the job builds + pushes:
+#      ghcr.io/<owner>/<repo>:latest
+#      ghcr.io/<owner>/<repo>:YYYY.MM.DD
+#      ghcr.io/<owner>/<repo>:sha-<upstream-short-sha>
+#
+#  Runs can also be triggered manually (Actions → Poll upstream & build → Run).
+# ============================================================================
+name: poll-and-build
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"   # check every 15 minutes; adjust to taste (see note below)
+  workflow_dispatch:            # manual "Run workflow" button
+  push:                          # also rebuild when the packaging itself changes
+    branches: [main]
+    paths:
+      - "Dockerfile"
+      - "runtime/**"
+      - ".github/workflows/poll-and-build.yml"
+
+permissions:
+  contents: read
+  packages: write
+
+concurrency:
+  group: poll-and-build
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: "https://github.com/xHashii/3.4.3_Source.git"
+  UPSTREAM_BRANCH: "main"
+
+jobs:
+  check-and-build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout packaging repo
+        uses: actions/checkout@v4
+
+      # ------------------------------------------------------------------
+      # Resolve the newest upstream commit and compute image name/tags
+      # ------------------------------------------------------------------
+      - name: Resolve latest upstream commit
+        id: upstream
+        run: |
+          SHA="$(git ls-remote "$UPSTREAM_REPO" "refs/heads/$UPSTREAM_BRANCH" | cut -f1)"
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "short=${SHA::7}" >> "$GITHUB_OUTPUT"
+          echo "Upstream HEAD: $SHA"
+
+      - name: Compute image name and tags
+        id: img
+        run: |
+          IMAGE="ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]')"
+          DATE_TAG="$(date -u +%Y.%m.%d)"
+          {
+            echo "image=$IMAGE"
+            echo "tags<<TAGS"
+            echo "$IMAGE:latest"
+            echo "$IMAGE:$DATE_TAG"
+            echo "$IMAGE:sha-${{ steps.upstream.outputs.short }}"
+            echo "TAGS"
+          } >> "$GITHUB_OUTPUT"
+          echo "Image: $IMAGE (latest, $DATE_TAG, sha-${{ steps.upstream.outputs.short }})"
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # ------------------------------------------------------------------
+      # Has this exact upstream commit already been built and pushed?
+      # If the sha-tagged image already exists on GHCR, there's nothing
+      # new to do — skip the build entirely. Manual (workflow_dispatch)
+      # and push runs always rebuild regardless, so you can force one.
+      # ------------------------------------------------------------------
+      - name: Check whether this commit is already built
+        id: check
+        run: |
+          TAG="${{ steps.img.outputs.image }}:sha-${{ steps.upstream.outputs.short }}"
+          if [ "${{ github.event_name }}" = "schedule" ] && docker manifest inspect "$TAG" > /dev/null 2>&1; then
+            echo "Already built: $TAG exists. Nothing to do."
+            echo "new=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "New commit (or manual/push run) — building."
+            echo "new=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      # ------------------------------------------------------------------
+      # Build & push — only when a new commit was found
+      # ------------------------------------------------------------------
+      - name: Set up Docker Buildx
+        if: steps.check.outputs.new == 'true'
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push image
+        if: steps.check.outputs.new == 'true'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.img.outputs.tags }}
+          build-args: |
+            SOURCE_REPO=${{ env.UPSTREAM_REPO }}
+            SOURCE_BRANCH=${{ env.UPSTREAM_BRANCH }}
+            SOURCE_SHA=${{ steps.upstream.outputs.sha }}
+            CACHEBUST=${{ github.run_id }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # ------------------------------------------------------------------
+      # Smoke test the freshly built image
+      # ------------------------------------------------------------------
+      - name: Smoke test (link check + banner)
+        if: steps.check.outputs.new == 'true'
+        run: |
+          IMAGE="${{ steps.img.outputs.image }}:latest"
+          echo "== checking dynamic libraries =="
+          docker run --rm --network none --entrypoint /bin/bash "$IMAGE" -c '
+            set -e
+            for b in /opt/tc/bin/*; do
+              if ldd "$b" | grep -q "not found"; then
+                echo "MISSING LIBS in $b:"; ldd "$b" | grep "not found"; exit 1
+              fi
+            done
+            echo "ALL_BINARIES_LINK_OK"'
+          echo "== checking binaries run (no DB, must print banner) =="
+          OUT="$(docker run --rm --network none \
+                  --entrypoint /opt/tc/bin/bnetserver "$IMAGE" \
+                  -c /opt/tc/etc/bnetserver.conf.dist 2>&1 | head -40)" || true
+          echo "$OUT"
+          echo "$OUT" | grep -qiE "bnetserver|TrinityCore" \
+            || { echo "bnetserver did not print its banner"; exit 1; }
+          echo "SMOKE_OK"
+
+      # ------------------------------------------------------------------
+      # Summary
+      # ------------------------------------------------------------------
+      - name: Job summary (built)
+        if: steps.check.outputs.new == 'true'
+        run: |
+          {
+            echo "## ✅ New upstream commit built"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Upstream | [$UPSTREAM_REPO](https://github.com/xHashii/3.4.3_Source) |"
+            echo "| Commit | [\`${{ steps.upstream.outputs.short }}\`](https://github.com/xHashii/3.4.3_Source/commit/${{ steps.upstream.outputs.sha }}) |"
+            echo "| Image | \`${{ steps.img.outputs.image }}:latest\` |"
+            echo ""
+            echo "Pull with:"
+            echo '```bash'
+            echo "docker pull ${{ steps.img.outputs.image }}:latest"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Job summary (no change)
+        if: steps.check.outputs.new == 'false'
+        run: |
+          echo "## No new commit — image is up to date (sha-${{ steps.upstream.outputs.short }})" >> "$GITHUB_STEP_SUMMARY"
