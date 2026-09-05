@@ -103,10 +103,17 @@ table_count() {
 
 import_sql() { # $1 = target db, $2 = file
   log "importing $(basename "$2") -> $1 (this can take a while)"
+  # The upstream Databases.7z is dumped from MariaDB, whose 11.x *_uca1400_*
+  # collations do not exist in MySQL 8.0 — the CREATE TABLE fails with
+  # "Unknown collation" and every later statement on that table then fails
+  # with "Table doesn't exist". Rewrite them to the equivalent *_general_ci
+  # (a no-op for dumps that do not use them). Streamed, so a 200 MB world
+  # dump costs no extra disk.
   # --force: the legacy dumps contain harmless quirks (e.g. duplicate table
   # definitions); the server validates the schema itself on startup anyway.
-  "$MYSQL_CLI" --force -h "$MYSQL_HOST" -P "$MYSQL_PORT" -u "$MYSQL_USER" \
-    --default-character-set=utf8mb4 --max-allowed-packet=1G "$1" < "$2"
+  sed -E 's/\butf8mb([34])_uca1400_[A-Za-z0-9_]*/utf8mb\1_general_ci/g' "$2" \
+    | "$MYSQL_CLI" --force -h "$MYSQL_HOST" -P "$MYSQL_PORT" -u "$MYSQL_USER" \
+        --default-character-set=utf8mb4 --max-allowed-packet=1G "$1"
 }
 
 # ============================================================================
