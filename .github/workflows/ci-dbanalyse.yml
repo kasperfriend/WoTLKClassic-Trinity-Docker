@@ -1,0 +1,91 @@
+# TEMPORARY: analyse the upstream Databases.7z dump and find exactly which
+# collations/charsets MySQL 8.0 rejects, so the import fix targets real names.
+name: ci-dbanalyse
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["arena/**"]
+    paths:
+      - ".github/workflows/ci-dbanalyse.yml"
+
+permissions:
+  contents: write
+  packages: read
+
+jobs:
+  analyse:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Download and inspect the dump
+        shell: bash
+        continue-on-error: true
+        run: |
+          set +e
+          R="$GITHUB_WORKSPACE/ci-db-report.md"
+          URL="https://github.com/lineagedr/3.4.3_Source/releases/download/databases/Databases.7z"
+          echo "# database dump analysis ($(date -u +%FT%TZ))" > "$R"
+          echo "" >> "$R"; echo "## 1. download" >> "$R"; echo '```' >> "$R"
+          curl -fL --retry 3 -o /tmp/db.7z "$URL" >> "$R" 2>&1 \
+            && echo "DOWNLOAD_OK $(stat -c%s /tmp/db.7z) bytes" >> "$R" \
+            || echo "DOWNLOAD_FAILED" >> "$R"
+          7z x -y -o/tmp/dbx /tmp/db.7z >> "$R" 2>&1
+          echo "--- extracted files:" >> "$R"
+          find /tmp/dbx -name '*.sql' -printf '%s\t%p\n' | sort -k2 >> "$R" 2>&1
+          echo '```' >> "$R"
+
+          echo "" >> "$R"; echo "## 2. every COLLATE / CHARSET name used in the dump" >> "$R"; echo '```' >> "$R"
+          cat $(find /tmp/dbx -name '*.sql' | sort) > /tmp/all.sql 2>/dev/null
+          echo "--- distinct collation names:" >> "$R"
+          grep -ohiE "collate[= ]*'?[a-z0-9_]+'?" /tmp/all.sql 2>/dev/null \
+            | sed -E "s/[Cc][Oo][Ll][Ll][Aa][Tt][Ee][= ]*'?//; s/'$//" | sort | uniq -c | sort -rn >> "$R" 2>&1
+          echo "--- distinct charset names:" >> "$R"
+          grep -ohiE "(default +)?charset[= ]*'?[a-z0-9_]+'?" /tmp/all.sql 2>/dev/null \
+            | sed -E "s/.*[Tt][= ]*'?//; s/'$//" | sort | uniq -c | sort -rn >> "$R" 2>&1
+          echo '```' >> "$R"
+
+          echo "" >> "$R"; echo "## 3. which of those MySQL 8.0 does not know" >> "$R"; echo '```' >> "$R"
+          docker run -d --name myq -e MYSQL_ROOT_PASSWORD=wow mysql:8.0 \
+            --default-authentication-plugin=mysql_native_password >> "$R" 2>&1
+          for _ in $(seq 1 40); do
+            docker exec myq mysqladmin ping -uroot -pwow --silent >/dev/null 2>&1 && break; sleep 3
+          done
+          docker exec myq mysql -uroot -pwow -N -e \
+            "SELECT COLLATION_NAME FROM information_schema.COLLATIONS;" 2>/dev/null | sort -u > /tmp/known.txt
+          echo "mysql:8.0 knows $(wc -l < /tmp/known.txt) collations" >> "$R"
+          grep -ohiE "collate[= ]*'?[a-z0-9_]+'?" /tmp/all.sql 2>/dev/null \
+            | sed -E "s/[Cc][Oo][Ll][Ll][Aa][Tt][Ee][= ]*'?//; s/'$//" | sort -u > /tmp/used.txt
+          echo "--- used by the dump but UNKNOWN to mysql:8.0:" >> "$R"
+          comm -23 /tmp/used.txt /tmp/known.txt >> "$R" 2>&1
+          echo "--- (for reference) used AND known:" >> "$R"
+          comm -12 /tmp/used.txt /tmp/known.txt >> "$R" 2>&1
+          echo '```' >> "$R"
+
+          echo "" >> "$R"; echo "## 4. other MariaDB-only syntax to watch for" >> "$R"; echo '```' >> "$R"
+          for pat in "uca1400" "RETURNING" "ENGINE *= *Aria" "PAGE_CHECKSUM" "TRANSACTIONAL" "utf8mb3" "INSERT +IGNORE" "battlepay_shop"; do
+            n=$(grep -acihE "$pat" /tmp/all.sql 2>/dev/null | paste -sd+ | bc 2>/dev/null || echo 0)
+            echo "  $pat : $n line(s)" >> "$R"
+          done
+          echo "--- sample lines containing uca1400:" >> "$R"
+          grep -ahiE "uca1400" /tmp/all.sql 2>/dev/null | head -5 | cut -c1-200 >> "$R" 2>&1
+          echo "--- sample lines referencing battlepay_shop:" >> "$R"
+          grep -ahiE "battlepay_shop" /tmp/all.sql 2>/dev/null | head -5 | cut -c1-200 >> "$R" 2>&1
+          echo '```' >> "$R"
+          docker rm -f myq >/dev/null 2>&1
+
+      - name: Publish
+        if: always()
+        shell: bash
+        run: |
+          [ -f ci-db-report.md ] || echo "no report" > ci-db-report.md
+          cat ci-db-report.md
+          git config user.name "arena-diagnostic[bot]"
+          git config user.email "arena-diagnostic[bot]@users.noreply.github.com"
+          git add ci-db-report.md
+          git commit -m "ci: database dump analysis" || echo "nothing to commit"
+          git pull --rebase origin "$GITHUB_REF_NAME" || true
+          git push origin "HEAD:$GITHUB_REF_NAME"
