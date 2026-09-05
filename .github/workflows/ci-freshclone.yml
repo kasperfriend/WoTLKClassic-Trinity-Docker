@@ -19,20 +19,24 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 110
     steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
       - name: Clone and up
         shell: bash
         continue-on-error: true
         run: |
           set +e
-          R="$HOME/ci-fresh-report.md"
+          R="$GITHUB_WORKSPACE/ci-fresh-report.md"
           echo "# fresh-clone report ($(date -u +%FT%TZ))" > "$R"
 
           echo "" >> "$R"; echo "## 1. clone + cp .env.example .env + docker compose up -d" >> "$R"; echo '```' >> "$R"
-          cd "$HOME"
+          rm -rf "$HOME/srv"
           git clone -q -b "$GITHUB_REF_NAME" --depth 1 \
-            "https://github.com/$GITHUB_REPOSITORY.git" srv >> "$R" 2>&1 \
-            && echo "CLONE_OK ($(git -C srv rev-parse --short HEAD))" >> "$R" || echo "CLONE_FAILED" >> "$R"
-          cd srv
+            "https://github.com/$GITHUB_REPOSITORY.git" "$HOME/srv" >> "$R" 2>&1 \
+            && echo "CLONE_OK ($(git -C "$HOME/srv" rev-parse --short HEAD))" >> "$R" || echo "CLONE_FAILED" >> "$R"
+          cd "$HOME/srv"
           ls -la >> "$R" 2>&1
           cp .env.example .env
           echo "--- host folders BEFORE up:" >> "$R"
@@ -45,24 +49,25 @@ jobs:
 
           echo "" >> "$R"; echo "## 2. host folders AFTER up" >> "$R"; echo '```' >> "$R"
           for d in data etc logs import import/world; do
-            [ -d "$d" ] && echo "  $d  $(ls -A "$d" 2>/dev/null | tr '\n' ' ')" >> "$R" || echo "  $d  MISSING" >> "$R"
+            [ -d "$d" ] && echo "  $d  [$(ls -A "$d" 2>/dev/null | tr '\n' ' ')]" >> "$R" || echo "  $d  MISSING" >> "$R"
           done
           ls -ld data etc logs import >> "$R" 2>&1
           echo '```' >> "$R"
 
-          echo "" >> "$R"; echo "## 3. world DB download + import (watching for errors)" >> "$R"; echo '```' >> "$R"
+          echo "" >> "$R"; echo "## 3. world DB download + import" >> "$R"; echo '```' >> "$R"
           prev=-1; stable=0
-          for i in $(seq 1 70); do
+          for i in $(seq 1 80); do
             S="$(docker inspect --format '{{.State.Status}}' wow343-worldserver-1 2>/dev/null || echo missing)"
             W="$(docker compose exec -T mysql mysql -uroot -pwow -N -e \
                  'SELECT COUNT(*) FROM information_schema.tables WHERE table_schema="world";' 2>/dev/null | tr -d '[:space:]')"
             E="$(docker logs wow343-worldserver-1 2>&1 | grep -ac '^ERROR')"
             STARTED="$(docker logs wow343-worldserver-1 2>&1 | grep -ac 'Using configuration file')"
-            echo "  t=$((i*30))s worldserver=$S world_tables=${W:-?} import_errors=$E worldserver_started=$STARTED" >> "$R"
-            if [ "${STARTED:-0}" -gt 0 ]; then echo "  -> worldserver reached startup" >> "$R"; break; fi
-            if [ "${W:-0}" = "$prev" ]; then stable=$((stable+1)); else stable=0; fi
+            echo "  t=$((i*30))s worldserver=$S world_tables=${W:-?} import_errors=$E started=$STARTED" >> "$R"
+            [ "${STARTED:-0}" -gt 0 ] && { echo "  -> worldserver reached startup" >> "$R"; break; }
+            # only count stability once the import has actually begun
+            if [ "${W:-0}" -gt 0 ] && [ "${W:-0}" = "$prev" ]; then stable=$((stable+1)); else stable=0; fi
             prev="${W:-0}"
-            [ "$stable" -ge 4 ] && { echo "  -> table count stable" >> "$R"; break; }
+            [ "$stable" -ge 6 ] && { echo "  -> table count stable for 3 min" >> "$R"; break; }
             sleep 30
           done
           echo "--- final table counts:" >> "$R"
@@ -75,8 +80,9 @@ jobs:
 
           echo "" >> "$R"; echo "## 4. configs on the host + edit persistence" >> "$R"; echo '```' >> "$R"
           ls -l etc >> "$R" 2>&1
-          echo "--- effective settings:" >> "$R"
+          echo "--- effective settings (worldserver):" >> "$R"
           grep -E "^(LoginDatabaseInfo|WorldDatabaseInfo|DataDir|LogsDir|SourceDirectory)" etc/worldserver.conf >> "$R" 2>&1
+          echo "--- effective settings (bnetserver):" >> "$R"
           grep -E "^(LoginDatabaseInfo|LogsDir|CertificatesFile|PrivateKeyFile)" etc/bnetserver.conf >> "$R" 2>&1
           sed -i 's/^LoginREST\.Port *=.*/LoginREST.Port = 9999/' etc/bnetserver.conf
           echo "# USER_EDIT_MARKER" >> etc/bnetserver.conf
@@ -101,10 +107,8 @@ jobs:
         if: always()
         shell: bash
         run: |
-          cd "$HOME"
-          [ -f ci-fresh-report.md ] || echo "no report" > ci-fresh-report.md
-          cp ci-fresh-report.md "$GITHUB_WORKSPACE/ci-fresh-report.md"
           cd "$GITHUB_WORKSPACE"
+          [ -f ci-fresh-report.md ] || echo "no report" > ci-fresh-report.md
           cat ci-fresh-report.md
           git config user.name "arena-diagnostic[bot]"
           git config user.email "arena-diagnostic[bot]@users.noreply.github.com"
