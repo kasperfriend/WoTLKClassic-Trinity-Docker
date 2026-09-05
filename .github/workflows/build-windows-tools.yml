@@ -1,0 +1,188 @@
+# ============================================================================
+#  Build the Windows extractor tools (.exe)
+#
+#  The Docker image only contains Linux binaries, which are useless to the
+#  average user whose 3.4.3 client sits on a Windows box. This job compiles
+#  the four extractor tools with MSVC and publishes a ready-to-use zip:
+#
+#      wow343-extractors-windows-x64.zip
+#        mapextractor.exe
+#        vmap4extractor.exe
+#        vmap4assembler.exe
+#        mmaps_generator.exe
+#        Extract-Data.bat      <- double-click this
+#        README.txt
+#        *.dll                 <- OpenSSL runtime
+#
+#  Users unzip it into their WoW 3.4.3 client folder (next to Wow.exe) and
+#  run Extract-Data.bat. No Docker, no compiler, no CMake on their side.
+#
+#  SERVERS=OFF is what makes this cheap: the tools need only Boost + OpenSSL,
+#  not MySQL/readline/protobuf, and the build takes ~10 min instead of an hour.
+# ============================================================================
+name: build-windows-tools
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - ".github/workflows/build-windows-tools.yml"
+      - "helpers/windows/**"
+  schedule:
+    # Weekly: the tools change far less often than the server does.
+    - cron: "0 4 * * 1"
+
+permissions:
+  contents: write
+
+concurrency:
+  group: build-windows-tools
+  cancel-in-progress: false
+
+env:
+  UPSTREAM_REPO: "https://github.com/xHashii/3.4.3_Source.git"
+  UPSTREAM_BRANCH: "main"
+  BOOST_VERSION: "1.83.0"
+
+jobs:
+  build:
+    runs-on: windows-2022
+    steps:
+      - name: Checkout packaging repo
+        uses: actions/checkout@v4
+        with:
+          path: packaging
+
+      - name: Clone upstream source
+        id: upstream
+        shell: bash
+        run: |
+          git clone --depth 1 --branch "$UPSTREAM_BRANCH" "$UPSTREAM_REPO" source
+          cd source
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+          echo "short=$(git rev-parse --short=7 HEAD)" >> "$GITHUB_OUTPUT"
+
+      - name: Install Boost
+        id: boost
+        uses: MarkusJx/install-boost@v2
+        with:
+          boost_version: ${{ env.BOOST_VERSION }}
+          platform_version: 2022
+          toolset: msvc
+          # Static libs keep the exes free of boost DLLs (dep/boost/CMakeLists.txt
+          # already sets Boost_USE_STATIC_LIBS ON for WIN32).
+          link: static
+
+      - name: Install OpenSSL
+        shell: pwsh
+        run: |
+          choco install openssl --no-progress -y
+          # choco lays it down here; the core's FindOpenSSL also probes the
+          # registry, but being explicit avoids surprises when choco changes.
+          $root = "C:\Program Files\OpenSSL-Win64"
+          if (-not (Test-Path $root)) { $root = "C:\Program Files\OpenSSL" }
+          if (-not (Test-Path $root)) { throw "OpenSSL not found after install" }
+          echo "OPENSSL_ROOT_DIR=$root" >> $env:GITHUB_ENV
+          Write-Host "OPENSSL_ROOT_DIR=$root"
+
+      - name: Configure (tools only)
+        shell: pwsh
+        env:
+          BOOST_ROOT: ${{ steps.boost.outputs.BOOST_ROOT }}
+        run: |
+          cmake -S source -B build -G "Visual Studio 17 2022" -A x64 `
+            -DSERVERS=OFF `
+            -DTOOLS=ON `
+            -DBUILD_TESTING=OFF `
+            -DWITH_WARNINGS=OFF `
+            -DBOOST_ROOT="$env:BOOST_ROOT" `
+            -DOPENSSL_ROOT_DIR="$env:OPENSSL_ROOT_DIR"
+
+      - name: Build
+        run: cmake --build build --config Release --parallel
+
+      - name: Stage the zip contents
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path stage | Out-Null
+
+          # The exes land in build/bin/Release with the VS generator.
+          $bin = "build/bin/Release"
+          $tools = @("mapextractor.exe","vmap4extractor.exe","vmap4assembler.exe","mmaps_generator.exe")
+          foreach ($t in $tools) {
+            $p = Join-Path $bin $t
+            if (-not (Test-Path $p)) { throw "missing build output: $p" }
+            Copy-Item $p stage/
+          }
+
+          # OpenSSL is linked dynamically -> ship its runtime DLLs so the exes
+          # start on a machine that has no OpenSSL installed.
+          foreach ($d in @("libcrypto-3-x64.dll","libssl-3-x64.dll")) {
+            $src = Join-Path $env:OPENSSL_ROOT_DIR "bin\$d"
+            if (Test-Path $src) { Copy-Item $src stage/ } else { Write-Warning "no $d" }
+          }
+
+          Copy-Item packaging/helpers/windows/Extract-Data.bat stage/
+          Copy-Item packaging/helpers/windows/README.txt stage/
+
+          "Built from xHashii/3.4.3_Source @ ${{ steps.upstream.outputs.sha }}" |
+            Out-File -Encoding utf8 stage/BUILD_INFO.txt
+
+          Get-ChildItem stage
+
+      - name: Smoke test the exes
+        shell: pwsh
+        run: |
+          # No client here, so the tools must fail on *missing data*, not on a
+          # missing DLL. A loader failure exits 0xC0000135/0xC0000139 and
+          # prints nothing, which is exactly what we want to catch.
+          foreach ($t in @("mapextractor.exe","vmap4extractor.exe","vmap4assembler.exe")) {
+            $out = & "stage/$t" "-?" 2>&1 | Out-String
+            Write-Host "--- $t ---`n$out"
+            if ($LASTEXITCODE -eq -1073741515 -or $LASTEXITCODE -eq -1073741701) {
+              throw "$t failed to load its DLLs (exit $LASTEXITCODE)"
+            }
+            if ([string]::IsNullOrWhiteSpace($out)) { throw "$t produced no output" }
+          }
+
+      - name: Zip
+        shell: pwsh
+        run: Compress-Archive -Path stage/* -DestinationPath wow343-extractors-windows-x64.zip
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: wow343-extractors-windows-x64
+          path: wow343-extractors-windows-x64.zip
+          if-no-files-found: error
+
+      # A rolling "extractors" release gives people a stable download URL that
+      # does not require being logged in to GitHub (artifacts do).
+      - name: Publish rolling release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: extractors
+          name: Windows extractor tools
+          body: |
+            Windows x64 extractor tools for the WoW 3.4.3 (WotLK Classic) client.
+
+            Built from [`${{ steps.upstream.outputs.short }}`](https://github.com/xHashii/3.4.3_Source/commit/${{ steps.upstream.outputs.sha }}).
+
+            **How to use:** download the zip, extract it into your 3.4.3 client
+            folder (the one with `Wow.exe`), and run `Extract-Data.bat`.
+            When it finishes, copy the `dbc`, `maps`, `vmaps`, `mmaps`, `gt`
+            and `cameras` folders into the `data` folder of your server.
+          files: wow343-extractors-windows-x64.zip
+          make_latest: false
+
+      - name: Summary
+        shell: bash
+        run: |
+          {
+            echo "## Windows extractor tools built"
+            echo ""
+            echo "Upstream commit: \`${{ steps.upstream.outputs.short }}\`"
+            echo ""
+            echo "Download: **Releases → Windows extractor tools → wow343-extractors-windows-x64.zip**"
+          } >> "$GITHUB_STEP_SUMMARY"

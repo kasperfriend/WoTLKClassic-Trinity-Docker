@@ -22,12 +22,17 @@ WoTLKClassic-Trinity-Docker/
 ├── Dockerfile                        # multi-stage: clone upstream → compile → slim runtime
 ├── docker-compose.yml                # mysql + bnetserver + worldserver stack
 ├── .env.example                      # copy to .env and edit
-├── .github/workflows/poll-and-build.yml # polls upstream, builds only on new commits
+├── .github/workflows/
+│   ├── poll-and-build.yml            # polls upstream, builds only on new commits
+│   └── build-windows-tools.yml       # builds the Windows extractor .exe zip
 ├── runtime/
 │   ├── entrypoint.sh                 # DB wait → create DBs → import → render conf → start
 │   └── healthcheck.sh                # container health (process + port)
 └── helpers/
-    └── extract-data.sh               # run extractor tools against your 3.4.3 client
+    ├── extract-data.sh               # Linux: extract via the Docker image
+    └── windows/                      # packaged into the Windows tools zip
+        ├── Extract-Data.bat          # double-click extractor for Windows users
+        └── README.txt
 ```
 
 ## Requirements
@@ -95,28 +100,75 @@ docker compose logs -f worldserver    # watch first boot
 
 Later boots take seconds.
 
-### 4. Extract client data (dbc / maps / vmaps / mmaps)
+### 4. Extract client data (dbc / maps / vmaps / mmaps / gt / cameras)
 
 The world DB alone isn't enough — worldserver also needs data extracted
-**from the 3.4.3 client**. Put your client anywhere on disk and run:
+**from the 3.4.3 client**. Pick whichever fits where your client lives.
+
+Either way, expect **1–4 hours** (`mmaps_generator` is the slow part) and
+~25 GB of free disk. **All the folders matter** — worldserver refuses to start
+without `dbc/`, `maps/`, `vmaps/`, `mmaps/` *and* `gt/`. Until they are there
+the worldserver container prints what is missing and waits, re-checking every
+60 s, so you can extract while the stack is already up.
+
+#### Windows client → download the ready-made `.exe` tools
+
+Most people have the client on Windows. Grab the prebuilt extractors — no
+Docker, no compiler, nothing to install:
+
+**[Releases → Windows extractor tools → `wow343-extractors-windows-x64.zip`](../../releases/tag/extractors)**
+
+1. Unzip it **into your client folder** — the one with `Wow.exe`:
+
+   ```
+   C:\Games\WoW 3.4.3\
+       Wow.exe
+       Data\
+       mapextractor.exe
+       vmap4extractor.exe
+       vmap4assembler.exe
+       mmaps_generator.exe
+       Extract-Data.bat      <-- double-click this
+   ```
+
+2. Double-click **`Extract-Data.bat`** and confirm.
+3. When it finishes, copy the produced `dbc`, `maps`, `vmaps`, `mmaps`, `gt`
+   and `cameras` folders into this repo's **`data/`** folder (next to
+   `docker-compose.yml`).
+
+The batch file runs the four tools in the right order with the right
+arguments, cleans up the ~10 GB `Buildings` intermediate, and refuses to
+finish silently if a required folder wasn't produced.
+
+> The zip is rebuilt weekly by
+> [`build-windows-tools.yml`](.github/workflows/build-windows-tools.yml)
+> (MSVC, `SERVERS=OFF TOOLS=ON`). Trigger it by hand from the **Actions** tab
+> the first time — the release doesn't exist until the workflow has run once.
+
+#### Linux client → use the Docker image you already built
 
 ```bash
 ./helpers/extract-data.sh /path/to/3.4.3/client
-docker compose restart worldserver
 ```
 
-The script runs `mapextractor`, `vmap4extractor`, `vmap4assembler` and
-`mmaps_generator` inside the image (you can also run them by hand with
-`docker run --rm -it --entrypoint bash <image>`), then moves `dbc/`,
-`maps/`, `vmaps/`, `mmaps/`, `gt/` and `cameras/` into `./data/`, which is
-mounted into both servers at `/opt/tc/data`.
+This runs the same four tools inside the image and moves the results into
+`./data/` for you — nothing to copy by hand.
 
-Expect this to take a few hours (`mmaps_generator` is the slow part) and
-~15–25 GB of free disk. **All six folders matter** — worldserver refuses to
-start without `dbc/`, `maps/`, `vmaps/`, `mmaps/` *and* `gt/`. Until they are
-there, the worldserver container prints what is missing and waits, re-checking
-every 60 s, so you can extract while the stack is already up — no restart
-needed, though `docker compose restart worldserver` is fine too.
+#### Running the tools by hand
+
+The order and arguments matter:
+
+```
+mapextractor
+vmap4extractor
+vmap4assembler Buildings vmaps
+mmaps_generator
+```
+
+`vmap4assembler .` does **not** work — `vmap4extractor` writes its raw output
+into `Buildings/`, and the assembler has to be pointed at it. Getting this
+wrong yields an empty `vmaps/` and the server then dies with *"Unable to load
+map and vmap data for starting zones"*.
 
 ### 5. Create an account & log in
 

@@ -1,0 +1,10 @@
+* text=auto eol=lf
+
+# Windows-facing files must keep CRLF: .bat parsing gets fragile with bare LF
+# (notably around multi-line blocks and labels), and Notepad renders an
+# LF-only .txt as one long line.
+*.bat text eol=crlf
+helpers/windows/README.txt text eol=crlf
+
+# Shell scripts must stay LF - they run inside the Linux image.
+*.sh text eol=lf
