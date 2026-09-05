@@ -33,8 +33,10 @@ services:
   bnetserver:
     # Default: a LOCAL image name, so `docker compose up` always builds from
     # this repo and never depends on a registry you may not have access to.
-    # Set SERVER_IMAGE in .env to the daily GHCR build to pull instead:
-    #   SERVER_IMAGE=ghcr.io/<owner>/<repo>:latest
+    # To pull the CI build instead, set SERVER_IMAGE in .env to the GHCR name
+    # the workflow actually publishes — ghcr.io/<owner>/<repo-in-lowercase>:
+    #   SERVER_IMAGE=ghcr.io/kasperfriend/wotlkclassic-trinity-docker:latest
+    # (that package must be Public, or the host must `docker login ghcr.io`)
     image: ${SERVER_IMAGE:-trinitycore-3.4.3:local}
     # Built from this repo when the image is missing locally
     build: .
