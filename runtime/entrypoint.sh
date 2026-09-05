@@ -322,7 +322,8 @@ if [ "$SERVER" = "worldserver" ]; then
     echo
     warn "client data is missing or empty in ./data :$missing"
     log  ">>> worldserver cannot start without it. Extract it from a 3.4.3 client:"
-    log  ">>>     ./helpers/extract-data.sh /path/to/3.4.3/client"
+    log  ">>>     ./extract-data.sh /path/to/3.4.3/client   (Windows: extract-data.bat)"
+    log  ">>> The launcher moves the results into ./data for you, then:"
     log  ">>>     docker compose restart worldserver"
     log  ">>> (bnetserver is already running — you can create accounts meanwhile.)"
     log  ">>> Waiting for ./data to be populated (checking every 60 s) ..."
