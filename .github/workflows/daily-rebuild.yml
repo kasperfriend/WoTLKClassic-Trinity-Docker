@@ -123,11 +123,13 @@ jobs:
       # ------------------------------------------------------------------
       # Smoke test the freshly built image
       # ------------------------------------------------------------------
-      - name: Smoke test (link check + banner)
+      - name: Smoke test (link check + live bnetserver)
         if: steps.guard.outputs.skip != 'true'
         run: |
           IMAGE="${{ steps.img.outputs.image }}:latest"
-          echo "== checking dynamic libraries =="
+          docker pull "$IMAGE"
+
+          echo "== 1. checking dynamic libraries =="
           docker run --rm --network none --entrypoint /bin/bash "$IMAGE" -c '
             set -e
             for b in /opt/tc/bin/*; do
@@ -136,23 +138,44 @@ jobs:
               fi
             done
             echo "ALL_BINARIES_LINK_OK"'
-          echo "== checking binaries run (no DB, must print banner) =="
-          # Logger.root in the .dist conf is 3 (Warning), which hides the INFO
-          # banner — raise it through the core's env override so the banner is
-          # actually emitted. The override key is UPPER_SNAKE_CASE:
-          # "Logger.root" -> TC_LOGGER_ROOT (see src/common/Configuration/Config.cpp).
-          OUT="$(docker run --rm --network none -e "TC_LOGGER_ROOT=4,Console" \
+
+          echo "== 2. binaries must execute and print their banner =="
+          # The .dist conf points at ./bnetserver.cert.pem *relative to the CWD*,
+          # so absolute paths are supplied through the core's TC_* env overrides.
+          # Those keys are UPPER_SNAKE_CASE ("CertificatesFile" ->
+          # TC_CERTIFICATES_FILE, see src/common/Configuration/Config.cpp), and
+          # Logger.root is raised from Warning(3) to Info(4) so the banner — an
+          # INFO message — is actually emitted.
+          OUT="$(docker run --rm --network none \
+                  -e TC_LOGGER_ROOT=4,Console \
+                  -e TC_CERTIFICATES_FILE=/opt/tc/etc/bnetserver.cert.pem \
+                  -e TC_PRIVATE_KEY_FILE=/opt/tc/etc/bnetserver.key.pem \
                   --entrypoint /opt/tc/bin/bnetserver "$IMAGE" \
                   -c /opt/tc/etc/bnetserver.conf.dist 2>&1 | head -40)" || true
           echo "$OUT"
-          # Guard against the old false positive: a dynamic-loader error message
-          # contains the path "/opt/tc/bin/bnetserver", so grepping for
-          # "bnetserver" alone "passes" even when the binary never ran.
+          # A dynamic-loader failure prints the path "/opt/tc/bin/bnetserver", so
+          # the old grep for "bnetserver|TrinityCore" passed on a dead binary.
           if echo "$OUT" | grep -qE "error while loading shared libraries|cannot open shared object file"; then
-            echo "bnetserver failed in the dynamic loader — see output above"; exit 1
+            echo "bnetserver failed in the dynamic loader"; exit 1
           fi
           echo "$OUT" | grep -qF "<Ctrl-C> to stop." \
             || { echo "bnetserver did not print its banner"; exit 1; }
+
+          echo "== 3. live stack: MySQL + bnetserver through docker-compose =="
+          # AUTO_DOWNLOAD_DB=false keeps this fast: bnetserver imports the base
+          # auth/characters schemas, renders its conf and starts. A "healthy"
+          # container means healthcheck.sh found the process AND port 1119 open.
+          AUTO_DOWNLOAD_DB=false SERVER_IMAGE="$IMAGE" docker compose up -d --pull never mysql bnetserver
+          H=missing
+          for _ in $(seq 1 36); do
+            H="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' wow343-bnetserver-1 2>/dev/null || echo missing)"
+            echo "  bnetserver health: $H"
+            [ "$H" = healthy ] && break
+            sleep 5
+          done
+          docker logs --tail 25 wow343-bnetserver-1 2>&1 | tr -d '\000' || true
+          docker compose down -v >/dev/null 2>&1 || true
+          [ "$H" = healthy ] || { echo "bnetserver never became healthy"; exit 1; }
           echo "SMOKE_OK"
 
       # ------------------------------------------------------------------
