@@ -1,0 +1,7 @@
+* text=auto eol=lf
+
+# Shell scripts must stay LF — they run inside the Linux image. This matters
+# on Windows checkouts, where autocrlf would otherwise give the container
+# CRLF scripts and the shebang line would fail with "bad interpreter".
+*.sh text eol=lf
+Dockerfile text eol=lf

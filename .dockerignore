@@ -4,10 +4,12 @@ data/
 logs/
 etc/
 import/
+tools/
+extract-data.sh
+extract-data.bat
 *.sql
 .env
 .git
 .github
 README.md
-helpers/
 docker-compose.yml
