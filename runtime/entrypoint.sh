@@ -242,6 +242,12 @@ fi
 # ============================================================================
 CONF_DIR="${TC_CONF_DIR:-/opt/tc/conf}"
 mkdir -p "$CONF_DIR" || die "cannot create $CONF_DIR"
+# Docker creates the host ./etc as root:root 755. A file that is merely 666 is
+# still not enough: editors (vim, nano) and `sed -i` save by writing a temp
+# file in the same directory and renaming, which needs write access on the
+# DIRECTORY. So make the directory world-writable too — otherwise the host
+# user cannot edit these confs without sudo.
+chmod 0777 "$CONF_DIR" 2>/dev/null || true
 conf_target="$CONF_DIR/${SERVER}.conf"
 conf_dist="$ETC_DIR/${SERVER}.conf.dist"
 [ -f "$conf_dist" ] || die "$conf_dist not found — broken image?"
@@ -265,7 +271,7 @@ else
   replace "LogsDir" "LogsDir = \"${TC_LOGS_DIR:-/opt/tc/logs}\""
   if [ "$SERVER" = "worldserver" ]; then
     # must point at the tree that contains sql/ so the auto-updater finds updates
-    replace "SourceDirectory" "SourceDirectory = \"${TC_SQL_DIR%/sql}\""
+    replace "SourceDirectory" "SourceDirectory = \"${SQL_DIR%/sql}\""
   else
     replace "CertificatesFile" "CertificatesFile = \"$ETC_DIR/bnetserver.cert.pem\""
     replace "PrivateKeyFile"   "PrivateKeyFile = \"$ETC_DIR/bnetserver.key.pem\""

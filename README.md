@@ -242,9 +242,11 @@ docker compose restart worldserver
   the templates.
 
 > **Linux note:** the containers run as root, so files the server writes into
-> `./data` and `./logs` are root-owned. The seeded confs are created
-> world-writable so you can edit them without `sudo`; for the rest,
-> `sudo chown -R $USER ./data ./logs` once.
+> `./data` and `./logs` are root-owned — `sudo chown -R $USER ./data ./logs`
+> once if that bothers you. `./etc` is deliberately made world-writable
+> (directory *and* seeded files), because editors and `sed -i` save by
+> renaming a temp file and need write access on the directory itself — without
+> it you could not edit the confs without `sudo`.
 
 > **Tip:** the core supports config overrides via environment variables — any
 > `worldserver.conf` field can be set with a `TC_`-prefixed variable whose name is
