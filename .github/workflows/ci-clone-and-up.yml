@@ -1,7 +1,6 @@
-# TEMPORARY: answers "can people just clone + docker compose up?".
-# Tests the two links in that chain that were never exercised:
-#   1. does `docker compose up` build an absent image when `image:`+`build:` are set
-#   2. does worldserver's first boot (download + import the world DB) actually work
+# TEMPORARY: does `docker compose up` build an absent image when both
+# `image:` and `build:` are set? That is the exact shape of this repo's
+# compose file, and the "clone -> docker compose up" promise depends on it.
 name: ci-clone-and-up
 
 on:
@@ -19,88 +18,47 @@ jobs:
   compose-semantics:
     runs-on: ubuntu-latest
     steps:
-      - name: Does 'compose up' build a missing image?
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Test
         shell: bash
         continue-on-error: true
         run: |
           R=ci-clone-and-up-report.md
-          echo "# clone-and-up report ($(date -u +%FT%TZ))" > "$R"
+          echo "# compose auto-build report ($(date -u +%FT%TZ))" > "$R"
           echo "" >> "$R"
-          echo "## 1. compose auto-build semantics (stub project, same shape as this repo)" >> "$R"
+          echo "## does 'compose up' build a missing image?" >> "$R"
           echo '```' >> "$R"
           mkdir -p /tmp/stub && cd /tmp/stub
           printf 'FROM busybox\nCMD ["sleep","300"]\n' > Dockerfile
           printf 'name: stubtest\nservices:\n  app:\n    image: stub-test:local\n    build: .\n' > docker-compose.yml
-          docker compose config >> "$R" 2>&1
-          echo "--- docker compose up -d (NO prior docker build)" >> "$R"
+          echo "--- image absent before up:" >> "$R"
+          docker image inspect stub-test:local >/dev/null 2>&1 && echo "PRESENT(unexpected)" >> "$R" || echo "ABSENT(expected)" >> "$R"
+          echo "--- docker compose up -d (no prior docker build):" >> "$R"
           docker compose up -d >> "$R" 2>&1 && echo "UP_EXIT_0" >> "$R" || echo "UP_EXIT_NONZERO" >> "$R"
-          docker image inspect stub-test:local >/dev/null 2>&1 \
-            && echo "AUTOBUILD_OK: compose built the missing image itself" >> "$R" \
-            || echo "AUTOBUILD_FAILED: compose did NOT build it" >> "$R"
+          if docker image inspect stub-test:local >/dev/null 2>&1; then
+            echo "AUTOBUILD_OK: compose built the missing image itself" >> "$R"
+            echo "::notice::AUTOBUILD_OK compose built the missing image"
+          else
+            echo "AUTOBUILD_FAILED: compose did NOT build it" >> "$R"
+            echo "::notice::AUTOBUILD_FAILED compose did not build the image"
+          fi
+          echo "--- compose ps:" >> "$R"
           docker compose ps >> "$R" 2>&1
           echo '```' >> "$R"
           cd / && rm -rf /tmp/stub
+
       - name: Publish
         if: always()
         shell: bash
         run: |
           [ -f ci-clone-and-up-report.md ] || echo "no report" > ci-clone-and-up-report.md
+          cat ci-clone-and-up-report.md
           git config user.name "arena-diagnostic[bot]"
           git config user.email "arena-diagnostic[bot]@users.noreply.github.com"
           git add ci-clone-and-up-report.md
-          git commit -m "ci: compose auto-build semantics" || echo "nothing to commit"
-          git pull --rebase origin "$GITHUB_REF_NAME" || true
-          git push origin "HEAD:$GITHUB_REF_NAME"
-
-  worldserver-bootstrap:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 1
-
-      - name: Build image
-        shell: bash
-        run: docker build -t trinitycore-3.4.3:local . 2>&1 | tail -15
-
-      - name: worldserver first boot (no client data on purpose)
-        shell: bash
-        continue-on-error: true
-        run: |
-          R=ci-worldserver-report.md
-          echo "# worldserver first-boot report ($(date -u +%FT%TZ))" > "$R"
-          echo "" >> "$R"
-          echo "## 2. mysql + worldserver, AUTO_DOWNLOAD_DB=true, ./data empty" >> "$R"
-          echo '```' >> "$R"
-          export AUTO_DOWNLOAD_DB=true SERVER_IMAGE=trinitycore-3.4.3:local
-          docker compose up -d --no-build mysql worldserver >> "$R" 2>&1 \
-            && echo "COMPOSE_UP_OK" >> "$R" || echo "COMPOSE_UP_FAILED" >> "$R"
-          for i in $(seq 1 56); do
-            S="$(docker inspect --format '{{.State.Status}}' wow343-worldserver-1 2>/dev/null || echo missing)"
-            W="$(docker compose exec -T mysql mysql -uroot -pwow -N -e \
-                 'SELECT COUNT(*) FROM information_schema.tables WHERE table_schema="world";' 2>/dev/null || echo err)"
-            echo "  t=$((i*30))s worldserver=$S world_tables=$W" >> "$R"
-            [ "$S" = exited ] && break
-            [ "$S" = running ] && [ "${W:-0}" -gt 100 ] 2>/dev/null && break
-            sleep 30
-          done
-          echo "--- worldserver logs (last 80, NULs stripped)" >> "$R"
-          docker logs --tail 80 wow343-worldserver-1 2>&1 | tr -d '\000' | grep -av '^[ /\\_]*$' >> "$R" 2>&1 || true
-          echo "--- table counts" >> "$R"
-          docker compose exec -T mysql mysql -uroot -pwow -N -e \
-            'SELECT table_schema, COUNT(*) FROM information_schema.tables WHERE table_schema IN ("auth","characters","world","hotfixes") GROUP BY table_schema;' >> "$R" 2>&1 || true
-          echo '```' >> "$R"
-          docker compose down -v >/dev/null 2>&1 || true
-      - name: Publish
-        if: always()
-        shell: bash
-        run: |
-          [ -f ci-worldserver-report.md ] || echo "no report" > ci-worldserver-report.md
-          tr -d '\000' < ci-worldserver-report.md > /tmp/r && mv /tmp/r ci-worldserver-report.md
-          echo "=== REPORT ==="; cat ci-worldserver-report.md
-          git config user.name "arena-diagnostic[bot]"
-          git config user.email "arena-diagnostic[bot]@users.noreply.github.com"
-          git add ci-worldserver-report.md
-          git commit -m "ci: worldserver first-boot report" || echo "nothing to commit"
+          git commit -m "ci: compose auto-build report" || echo "nothing to commit"
           git pull --rebase origin "$GITHUB_REF_NAME" || true
           git push origin "HEAD:$GITHUB_REF_NAME"
