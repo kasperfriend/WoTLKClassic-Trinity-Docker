@@ -170,6 +170,36 @@ jobs:
           echo "SMOKE_OK"
 
       # ------------------------------------------------------------------
+      # The whole point of this repo is that a stranger can clone it and run
+      # `docker compose up -d` with no login and no compiler. That only holds
+      # while the package stays PUBLIC, and there is no API to change
+      # visibility — so verify it every run (builds *and* no-op polls) and
+      # shout on the Actions page if it ever regresses.
+      # ------------------------------------------------------------------
+      - name: Verify anonymous pull (the new-user path)
+        if: ${{ !cancelled() }}
+        run: |
+          # This is literally what a stranger's Docker does on their first
+          # `up -d`: an anonymous token for the repo scope, then a manifest
+          # HEAD. 200 = no login needed for anybody. Anything else and the
+          # package has gone private / the tag is gone.
+          REPO_PATH="${{ steps.img.outputs.image }}"
+          REPO_PATH="${REPO_PATH#ghcr.io/}"
+          TOK="$(curl -s --max-time 20 \
+                   "https://ghcr.io/token?scope=repository:${REPO_PATH}:pull&service=ghcr.io" \
+                 | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')"
+          CODE="$(curl -sI --max-time 20 -o /dev/null -w '%{http_code}' \
+                    -H "Authorization: Bearer $TOK" \
+                    -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json' \
+                    "https://ghcr.io/v2/${REPO_PATH}/manifests/latest")"
+          echo "anonymous manifest check for ${{ steps.img.outputs.image }}:latest → HTTP $CODE"
+          if [ "$CODE" = "200" ]; then
+            echo "Public: a fresh clone pulls it with no docker login."
+          else
+            echo "::warning title=Image is NOT anonymously pullable (HTTP $CODE)::An anonymous pull of ${{ steps.img.outputs.image }}:latest was refused or missing. Until the package is Public, a fresh 'docker compose up -d' cannot pull it — older Compose fails outright, newer falls back to a 25-45 min local compile. Fix: repo → Packages → ${{ github.event.repository.name }} → Manage visibility → Public (GitHub has no API for that switch)."
+          fi
+
+      # ------------------------------------------------------------------
       # Summary
       # ------------------------------------------------------------------
       - name: Job summary (built)

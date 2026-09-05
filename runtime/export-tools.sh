@@ -27,7 +27,9 @@ set -u
 DEST="${EXPORT_DIR:-/export}"
 BIN_DIR="${TC_BIN_DIR:-/opt/tc/bin}"
 TOOLS="mapextractor vmap4extractor vmap4assembler mmaps_generator"
-IMAGE_REF="${SERVER_IMAGE_REF:-trinitycore-3.4.3:local}"
+# Baked into the launchers when compose does not pass one: the public CI image,
+# which is what docker-compose.yml defaults to.
+IMAGE_REF="${SERVER_IMAGE_REF:-ghcr.io/kasperfriend/wotlkclassic-trinity-docker:latest}"
 
 log() { echo "[export-tools] $*"; }
 
@@ -140,24 +142,28 @@ ensure_image() {
 
   case "$IMAGE" in
     *.*/*|*:*/*)                                   # <host>[:port]/name → a registry
-      echo "   $IMAGE is not cached yet — pulling it"
+      echo "   '$IMAGE' is not cached yet — pulling it"
       docker pull "$IMAGE" && return 0
-      echo "ERROR: could not pull $IMAGE"
-      echo "       GHCR packages are private by default: make it Public, or run"
-      echo "       'docker login ${IMAGE%%/*}' first."
-      exit 1 ;;
+      echo
+      echo "ERROR: could not pull '$IMAGE'."
+      echo "       A public GHCR package needs no login at all, so this is normally"
+      echo "       no internet, a typo in the name, or a PRIVATE package — a fork's"
+      echo "       new package starts out private: make it Public (Packages → the"
+      echo "       package → Change visibility), or run 'docker login ${IMAGE%%/*}'."
+      ;;
+    *)
+      echo
+      echo "ERROR: this Docker engine has no image named '$IMAGE'."
+      echo "       That is a local-only name — no registry serves it, so Docker"
+      echo "       cannot download it (hence 'pull access denied for ${IMAGE%%:*}')."
+      ;;
   esac
 
   echo
-  echo "ERROR: this Docker engine has no image named '$IMAGE'."
-  echo "       That is a local-only name — no registry serves it, so Docker"
-  echo "       cannot download it (hence 'pull access denied for ${IMAGE%%:*}')."
-  echo
-  echo "   Fix it one of two ways:"
-  echo "     a) build it here, once (25-45 min):   docker compose build"
-  echo "     b) point at the CI image in .env, then re-run:"
-  echo "          SERVER_IMAGE=ghcr.io/<you>/<repo>:latest"
-  echo "          SERVER_PULL_POLICY=always"
+  echo "   Two ways forward:"
+  echo "     a) build this repo's image once:   docker compose build   (25-45 min)"
+  echo "     b) drop the SERVER_IMAGE override — the compose default is the public"
+  echo "        prebuilt image: ghcr.io/<owner>/<repo>:latest with SERVER_PULL_POLICY=missing"
   echo
   if [ -t 0 ] && [ -f "$HERE/docker-compose.yml" ]; then
     printf "   Build it now? [y/N] "
@@ -304,24 +310,42 @@ if errorlevel 1 (
   goto :fail
 )
 
-rem  The tools are run INSIDE the image, so the image must be in the local
-rem  Docker cache. A plain name (no registry host) is not published anywhere,
-rem  so `docker run` cannot download it - that is exactly what
-rem  "pull access denied for trinitycore-3.4.3" means. Check before starting,
-rem  and offer to build instead of failing 2 seconds in.
+rem  The tools run INSIDE the image, so it has to be in the local Docker
+rem  cache first. Never let `docker run` discover that on its own: it answers a
+rem  missing local name with "pull access denied for trinitycore-3.4.3,
+rem  repository does not exist or may require 'docker login'", which reads like
+rem  a credentials problem and is not one. Registry names (with a slash) are
+rem  pulled; anything else goes straight to "build it".
 docker image inspect "%SERVER_IMAGE%" >nul 2>&1
 if not errorlevel 1 goto :image_ready
 echo(
-echo  This Docker engine has no image named "%SERVER_IMAGE%".
-echo  It is built from this repo - no registry serves such a plain name, so
-echo  Docker cannot download it (that is the "pull access denied" error).
+echo  This Docker engine has no image named "%SERVER_IMAGE%" yet.
+echo(
+echo "%SERVER_IMAGE%" | find "/" >nul
+if errorlevel 1 goto :no_registry_name
+echo  Pulling it (a public GHCR package needs no login)...
+docker pull "%SERVER_IMAGE%"
+if not errorlevel 1 goto :image_ready
+echo(
+echo  The pull failed. A public package needs no credentials, so this is
+echo  usually no internet, a typo, or a PRIVATE package - a fork's new
+echo  package starts out private: make it Public under Packages, or run
+echo      docker login ghcr.io
+goto :offer_build
+
+:no_registry_name
+echo  That is a local-only name: no registry serves it, so Docker cannot
+echo  download it - and "pull access denied for %SERVER_IMAGE%" is Docker
+echo  saying "not built here", not "wrong password". It only exists once this
+echo  repo has built it.
+
+:offer_build
 echo(
 choice /C YN /M "Build it now - 25-45 minutes, only the first time"
 if errorlevel 2 (
   echo(
-  echo  Not building. Either run "docker compose build" yourself, or set in .env:
-  echo      SERVER_IMAGE=ghcr.io/your-user/your-repo:latest
-  echo      SERVER_PULL_POLICY=always
+  echo  Not building. Either run "docker compose build" yourself, or delete the
+  echo  SERVER_IMAGE line from .env so the stack uses the public prebuilt image.
   goto :fail
 )
 echo(

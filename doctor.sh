@@ -9,11 +9,12 @@
 #      trinitycore-3.4.3, repository does not exist or may require
 #      'docker login'
 #
-#  Short version: `trinitycore-3.4.3:local` is a LOCAL image name. It is not
-#  on Docker Hub and never will be — it only exists after this repo builds it.
-#  Docker fell back to the registry because the image was missing in that
-#  engine, so the fix is almost always:  docker compose build
-#  (or point SERVER_IMAGE at your GHCR image and set SERVER_PULL_POLICY).
+#  Short version: that name is a LOCAL one. It is not on Docker Hub and never
+#  will be — it only exists after this repo builds it. The stack's default is
+#  now the public prebuilt image (ghcr.io/kasperfriend/wotlkclassic-trinity-
+#  docker:latest), so this error means an old .env still pins SERVER_IMAGE to
+#  the local name while the policy allows a registry lookup. Either pair it with
+#  SERVER_PULL_POLICY=never (build here) or delete the line (pull the CI image).
 #
 #  This script changes nothing: it only reports what it finds and prints the
 #  command that fixes each problem. Exit code 0 = nothing fatal found.
@@ -59,10 +60,10 @@ IMAGE="$(env_value SERVER_IMAGE)"
 if [ -n "$IMAGE" ]; then
   if [ -n "${SERVER_IMAGE:-}" ]; then IMAGE_SRC="from the environment"; else IMAGE_SRC="from .env"; fi
 else
-  IMAGE="trinitycore-3.4.3:local"; IMAGE_SRC="compose default, no .env override"
+  IMAGE="ghcr.io/kasperfriend/wotlkclassic-trinity-docker:latest"; IMAGE_SRC="compose default, no .env override"
 fi
 POLICY="$(env_value SERVER_PULL_POLICY)"
-[ -n "$POLICY" ] || POLICY="never (compose default)"
+[ -n "$POLICY" ] || POLICY="missing"
 
 # Does the name carry a registry host?  "ghcr.io/o/r" and "localhost:5000/x"
 # do; "trinitycore-3.4.3:local" and "my/name" resolve to Docker Hub.
@@ -71,6 +72,36 @@ is_registry_qualified() {
     *.*/*|*:*/*) return 0 ;;
     *)           return 1 ;;
   esac
+}
+
+probe() { # $1 = url → HTTP status code of a HEAD request, empty when unreachable
+  command -v curl >/dev/null 2>&1 || return 0
+  curl -sIL --max-time 10 -o /dev/null -w '%{http_code}' "$1" 2>/dev/null || true
+}
+
+# Ask a registry whether an image can be pulled WITHOUT credentials — that is
+# the whole difference between "public package" and "run docker login first".
+# Sets PUB_CODE (200 public / 401|403 private / 404 unknown name / "" unknown).
+PUB_CODE=""
+anonymous_pull_probe() { # $1 = full image name
+  local name="$1" path tag tok repo
+  case "$name" in ghcr.io/*) ;; *) return 0 ;; esac
+  path="${name#ghcr.io/}"
+  case "$path" in
+    *:*) tag="${path##*:}"; path="${path%:*}" ;;
+    *)   tag="latest" ;;
+  esac
+  # a digest reference or a name with more than one slash still works: the
+  # token scope is the repository path, the tag goes on the manifest URL
+  case "$path" in */*/*) return 0 ;; esac
+  tok="$(curl -s --max-time 15 "https://ghcr.io/token?scope=repository:${path}:pull&service=ghcr.io" \
+          2>/dev/null | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')"
+  [ -n "$tok" ] || return 0
+  PUB_CODE="$(curl -sI --max-time 15 -o /dev/null -w '%{http_code}' \
+      -H "Authorization: Bearer $tok" \
+      -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.docker.distribution.manifest.list.v2+json, application/vnd.docker.distribution.manifest.v2+json' \
+      "https://ghcr.io/v2/${path}/manifests/${tag}" 2>/dev/null)"
+  return 0
 }
 
 HAVE_DOCKER=0     # the docker CLI exists
@@ -118,23 +149,44 @@ hdr "2. The server image  ($IMAGE  — $IMAGE_SRC)"
 if [ "$ENGINE_OK" -eq 0 ]; then
   info "skipped — no Docker engine to ask (section 1)"
 else
+  CACHED=no
+  docker image inspect "$IMAGE" >/dev/null 2>&1 && CACHED=yes
+
   if is_registry_qualified "$IMAGE"; then
-    ok "'$IMAGE' is a registry image — pulling it is expected (policy: $POLICY)"
+    # Registry image: the question is whether it can be pulled anonymously.
     case "$POLICY" in
       never*)
         warn "SERVER_PULL_POLICY=never + a registry image: $IMAGE only works if it is already cached"
-        fix "docker pull $IMAGE    (or set SERVER_PULL_POLICY=always in .env so every up refreshes it)" ;;
+        fix "docker pull $IMAGE    (or set SERVER_PULL_POLICY=missing so 'up' pulls it itself)" ;;
+      *)  if [ "$CACHED" = yes ]; then
+            ok "cache hit — 'up' starts straight from the local image (policy: $POLICY)"
+          else
+            ok "not cached — 'up' pulls it from the registry (policy: $POLICY)"
+          fi ;;
     esac
-    if ! docker manifest inspect "$IMAGE" >/dev/null 2>&1; then
-      warn "the registry has no readable '$IMAGE' (private package, wrong name, or not logged in)"
-      fix "GHCR: set the package to Public, or run 'docker login ghcr.io'. The name is ghcr.io/<owner>/<repo-lowercased>:<tag>"
+    if [ "$CACHED" = no ] && command -v curl >/dev/null 2>&1; then
+      anonymous_pull_probe "$IMAGE"
+      case "$PUB_CODE" in
+        200)      ok "$IMAGE is anonymously pullable — the package is Public, no 'docker login' needed" ;;
+        401|403)  fail "$IMAGE needs credentials — the GHCR package is Private"
+                  fix "GitHub → $IMAGE's repo → Packages → this package → Manage visibility → Public (one click, then nobody logs in)" ;;
+        404)      fail "the registry has no $IMAGE (wrong owner/repo case, renamed repo, or a tag never pushed)"
+                  fix "check the tag on the repo's Packages page, or delete the SERVER_IMAGE line so the compose default is used" ;;
+        ""|000)   info "could not reach the registry from here (offline?) — 'docker compose up' will answer it" ;;
+        *)        warn "registry answered HTTP $PUB_CODE for $IMAGE" ;;
+      esac
     fi
   else
+    # Local-only name: nothing to pull, so it must exist in this engine.
     info "'$IMAGE' is a local-only name — this repo builds it, no registry serves it."
-    info "So 'pull access denied' / 'repository does not exist' about it means MISSING, not bad credentials."
+    case "$POLICY" in
+      never*) ok "policy is 'never' → Compose builds it here instead of probing Docker Hub" ;;
+      *)      warn "a plain name with policy '$POLICY' makes Compose look it up on Docker Hub → 'pull access denied for ${IMAGE%%:*}'"
+              fix "set SERVER_PULL_POLICY=never in .env alongside it, or delete SERVER_IMAGE to use the public CI image" ;;
+    esac
   fi
 
-  if docker image inspect "$IMAGE" >/dev/null 2>&1; then
+  if [ "$CACHED" = yes ]; then
     created="$(docker image inspect "$IMAGE" --format '{{.Created}}' 2>/dev/null | cut -d. -f1)"
     size="$(docker image inspect "$IMAGE" --format '{{.Size}}' 2>/dev/null | awk '$1 ~ /^[0-9]+$/ { printf "%.1f GB", $1/1073741824 }')"
     detail=""
@@ -146,14 +198,16 @@ else
       warn "'$IMAGE' resolves to an untagged/dangling image"
       fix "docker compose build   (re-tags it as $IMAGE)"
     fi
+  elif is_registry_qualified "$IMAGE"; then
+    case "$POLICY" in
+      never*) fail "'$IMAGE' is neither cached nor allowed to be pulled (policy: never)"
+              fix "docker pull $IMAGE   or set SERVER_PULL_POLICY=missing" ;;
+      *)      info "not cached yet: the next 'docker compose up' downloads it (a few minutes, no login)" ;;
+    esac
   else
-    fail "'$IMAGE' is NOT in this Docker engine — Compose must build it (25-45 min) before anything can start"
-    fix "docker compose build     (or just: docker compose up -d — it builds when the image is missing)"
-    if ! is_registry_qualified "$IMAGE"; then
-      info "        note: 'docker compose pull' is not a fix. For '$IMAGE' it asks Docker Hub and"
-      info "        answers exactly the error you are chasing (pull access denied for ${IMAGE%%:*})."
-      info "        'docker login' does not help either — the repository does not exist."
-    fi
+    warn "'$IMAGE' is not built in this engine yet — 'docker compose up -d' will compile it first (25-45 min)"
+    info "        'docker compose pull' is not a fix for a local name; 'docker login' is not either."
+    fix "want the ready image instead? delete SERVER_IMAGE/SERVER_PULL_POLICY from .env (the default is the public CI build)"
   fi
 fi
 
@@ -251,6 +305,9 @@ else
 fi
 
 hdr "7. First-run downloads (needs internet)"
+# The DB bundle is needed by everybody on the first boot; the source repo only
+# by people who compile the image here, so its severity follows $CACHED.
+[ "${CACHED:-}" = yes ] && BUILD_NEEDED=no || BUILD_NEEDED=yes
 # A fresh clone builds the image from SOURCE_REPO and then downloads the world
 # DB inside the container. If either URL is gone, you want to know before the
 # 25-45 minute compile, not after it.
@@ -263,17 +320,14 @@ if ! command -v curl >/dev/null 2>&1; then
   info "skipped (no curl): SOURCE_REPO=$SRC_REPO_URL"
   info "                     DB_URL=$DB_BUNDLE_URL"
 else
-  probe() { # $1 = url → HTTP status, 000 when unreachable
-    curl -sIL --max-time 10 -o /dev/null -w '%{http_code}' "$1" 2>/dev/null || true
-  }
   repo_page="$(printf '%s' "$SRC_REPO_URL" | sed -e 's/\.git$//' -e 's|^git@github.com:|https://github.com/|')"
   case "$repo_page" in
     http*)
       code="$(probe "$repo_page")"
       case "$code" in
-        200|301|302) ok "source to compile: $repo_page → $code" ;;
-        000|"")      warn "no internet (or GitHub unreachable) right now — a fresh 'docker compose build' would fail at the git clone" ;;
-        404)         fail "SOURCE_REPO is gone ($repo_page → 404) — the build would die with 'repository not found'"
+        200|301|302) ok "source to compile (only if you build here): $repo_page → $code" ;;
+        000|"")       if [ "$BUILD_NEEDED" = no ]; then info "GitHub not reachable — irrelevant while the image is cached, but a rebuild would fail at the git clone"; else warn "no internet (or GitHub unreachable) — a fresh 'docker compose build' would fail at the git clone"; fi ;;
+        404)         if [ "$BUILD_NEEDED" = no ]; then warn "SOURCE_REPO is gone ($repo_page → 404) — fine today, but the next rebuild dies with 'repository not found'"; else fail "SOURCE_REPO is gone ($repo_page → 404) — the build would die with 'repository not found'"; fi
                      fix "point .env at a live fork: SOURCE_REPO=https://github.com/<you>/<fork>.git" ;;
         *)           warn "SOURCE_REPO page returned HTTP $code ($repo_page)" ;;
       esac ;;

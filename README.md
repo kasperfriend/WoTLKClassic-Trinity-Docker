@@ -6,10 +6,20 @@ A self-rebuilding Docker distribution of the
 **[xHashii/3.4.3_Source](https://github.com/xHashii/3.4.3_Source)** World of
 Warcraft 3.4.3 (WotLK Classic) server (TrinityCore-based).
 
-* **Builds** `worldserver`, `bnetserver` and the map/vmap/mmap extractor
-  tools from the upstream source — in Docker, on every run.
+**`git clone` → `docker compose up -d`.** That is the whole install: the image
+is a **public** GHCR package, so there is no `docker login`, no
+Visual Studio/Boost/CMake and no 45-minute compile between you and a running
+server.
+
+* **Runs prebuilt, or builds itself** — `docker compose up -d` pulls
+  `ghcr.io/kasperfriend/wotlkclassic-trinity-docker:latest`; only when that
+  pull *can't* happen does Compose compile `worldserver`, `bnetserver` and the
+  map/vmap/mmap extractors from the upstream source in this Dockerfile. Both
+  paths produce the same image.
 * **Rebuilds itself** via GitHub Actions: polls upstream every 15 minutes and
   builds + publishes to GHCR only when there is a commit it hasn't built yet.
+  Every run also verifies the image is still anonymously pullable, so the
+  "no login" promise cannot rot silently.
 * **Runs the whole stack** with one command: MySQL 8 + logon server +
   world server, with databases created and populated automatically.
 
@@ -19,9 +29,10 @@ Warcraft 3.4.3 (WotLK Classic) server (TrinityCore-based).
 
 ```
 1. git clone                    →  get this repo
-2. docker compose up -d         →  ONE command: builds, starts, creates the
-                                   DBs, downloads the world DB, drops the
-                                   extractors into this folder
+2. docker compose up -d         →  ONE command: pulls the public prebuilt
+                                   image, starts, creates the DBs, downloads
+                                   the world DB, drops the extractors into
+                                   this folder — no login, no compiling
 3. ./extract-data.sh <client>   →  extract dbc/maps/vmaps/mmaps/gt/cameras
                                    from your 3.4.3 client (1–4 h)
                                    — or ./place-data.sh <path> if you
@@ -39,10 +50,13 @@ Steps 2–5 happen once. After that, starting the server is just
 
 ## Requirements
 
-* Docker 24+ with BuildKit and the `docker compose` **v2** plugin
+* Docker 24+ with the `docker compose` **v2** plugin
   (`docker compose version` ≥ 2.17 — that is when `pull_policy` arrived; the
-  one in this repo is what keeps a first `up` from probing Docker Hub)
+  one set here is what keeps a pinned local name from probing Docker Hub)
 * ~10 GB disk for the image, +25 GB while extracting a client
+* **No compiler toolchain, no registry login, no account at all.** You only
+  need to build the image yourself if you opt into it — see
+  [Which image you run](#which-image-you-run-and-why-no-login-is-ever-needed)
 * The WoW 3.4.3 (WotLK Classic) client if you want a playable world.
   3.4.3 is not the current Classic tier any more, so plan on getting the
   client from the link in the
@@ -70,9 +84,11 @@ That's the whole setup — everything below runs from this folder, and every
 file you will ever need to touch shows up right here.
 
 > **Optional, before step 2:** `cp .env.example .env` and edit it to change the
-> MySQL password, the realm name/address, or to run the CI-built GHCR image
-> instead of building locally. The defaults work as-is, so you can skip this
-> and come back to it later (see [Configuration](#configuration-reference)).
+> MySQL password, the realm name/address, or to switch between the public CI
+> image and compiling it yourself. **The defaults work as-is** — including the
+> image, which is pulled from the public GHCR package — so you can skip this
+> file entirely and come back to it later
+> (see [Configuration](#configuration-reference)).
 
 ### 2. Run `docker compose up -d` — once
 
@@ -84,8 +100,12 @@ docker compose logs -f worldserver     # watch the first boot
 This one command does everything up to the point where the server needs your
 client data:
 
-1. **Builds the image** from the upstream source (~25–45 min on a typical
-   4-core machine; `SERVERS=ON`, `TOOLS=ON`, Release). Later runs reuse it.
+1. **Gets the image**: pulls the public
+   `ghcr.io/kasperfriend/wotlkclassic-trinity-docker:latest` — a few minutes,
+   no `docker login`, no compiler. It is only pulled when it isn't cached yet,
+   and if the pull can't happen (offline, registry down, or `SERVER_IMAGE`
+   pinned to a local name) Compose compiles it from this Dockerfile instead
+   (~25–45 min on a typical 4-core machine; `SERVERS=ON`, `TOOLS=ON`).
 2. **Starts the stack** — MySQL 8 + `bnetserver` + `worldserver`.
 3. **Creates the databases** `auth`, `characters`, `world`, `hotfixes`
    (utf8mb4) and imports the base schemas shipped in the source.
@@ -106,31 +126,35 @@ Then worldserver prints *"client data is missing or empty in ./data"* and
 and go to step 3. `bnetserver` is already up, so you can create accounts in
 the meantime.
 
-> **Prefer the CI-built image over compiling?** Put **both** lines into `.env`
-> before this step — see [Auto-rebuild](#auto-rebuild-poll-upstream-every-15-minutes):
+> **Rather compile it yourself** (own fork of the core, own source commit,
+> air-gapped host)? Put **both** lines in `.env` — the pair is what matters, see
+> [Which image you run](#which-image-you-run-and-why-no-login-is-ever-needed):
 > ```ini
-> SERVER_IMAGE=ghcr.io/<you>/<repo>:latest
-> SERVER_PULL_POLICY=always
+> SERVER_IMAGE=trinitycore-3.4.3:local
+> SERVER_PULL_POLICY=never
 > ```
-> You can also pre-build by hand with `docker build -t trinitycore-3.4.3:local .`,
-> but `up -d` already does it for you.
-
+> `up -d` then builds from this Dockerfile and never asks a registry. Without
+> the second line it would look the name up on Docker Hub and print:
+>
 > #### `pull access denied for trinitycore-3.4.3, repository does not exist or may require 'docker login'`
 >
-> That is **not** a login problem, and Docker Hub has nothing to do with it.
-> `trinitycore-3.4.3:local` is a *local* image name: the image only exists in
-> your Docker engine once this repo has built it, so any command that lets
-> Docker "helpfully" look it up in a registry answers exactly this sentence.
-> The whole fix is to make sure the image exists here:
+> **Not** a login problem. A plain name like `trinitycore-3.4.3:local` is
+> *local-only*: it exists only after this repo builds it, so every command that
+> resolves it through a registry answers exactly this sentence. Two ways out —
+> take the default (recommended), or make the local build deliberate:
 >
 > ```bash
-> docker compose build          # 25-45 min, one time — after that `up` is instant
-> docker compose up -d
+> # a) drop the overrides and pull the public prebuilt image  (fast)
+> sed -i.bak '/^SERVER_\(IMAGE\|PULL_POLICY\)=/d' .env && docker compose up -d
+>
+> # b) keep compiling here, once (25-45 min)
+> echo 'SERVER_PULL_POLICY=never' >> .env && docker compose up -d
 > ```
 >
-> [`./doctor.sh`](#troubleshooting) pinpoints which case you are in, and
-> [Why the server image is built, not pulled](#why-the-server-image-is-built-not-pulled)
-> lists every command that triggers it.
+> [`./doctor.sh`](#troubleshooting) tells you which case you are in — including
+> whether the registry would even answer an anonymous pull — and
+> [Which image you run](#which-image-you-run-and-why-no-login-is-ever-needed)
+> lists every command that can trigger it.
 
 ### 3. Extract the client data
 
@@ -277,6 +301,7 @@ That also creates the game account `myuser@local#1` for you.
 
 ```bash
 docker compose up -d          # start (seconds — no re-import, no re-extract)
+docker compose pull           # optional: refresh to the newest CI build
 docker compose stop           # stop, keep everything
 docker compose logs -f worldserver
 docker compose restart worldserver    # after editing ./etc/worldserver.conf
@@ -369,22 +394,25 @@ GitHub repo:
    restricts the default `GITHUB_TOKEN` (most personal repos need nothing).
 3. Push to `main` triggers a build immediately; afterwards the poller runs
    every 15 minutes. You can always hit **Run workflow** to force a build.
-4. **Make the image pullable — this step is mandatory if anyone but you should
-   pull it.** GHCR packages are **private by default**, so a fresh
-   `docker pull` fails with `denied`/`manifest unknown` until you go to your
-   repo's **Packages** section → package settings → *Change visibility →
-   Public*. (Or keep it private and `docker login ghcr.io` on every host that
-   pulls it.)
-5. Put **both** lines in your `.env`:
+4. **Make the image pullable — mandatory if anyone but you should pull it.**
+   GHCR packages are **private by default**, so a fresh `docker pull` fails
+   with `denied`/`manifest unknown` until you go to your repo's **Packages**
+   section → the package → *Change visibility → Public*. GitHub offers no API
+   for that switch, so it is a one-time click; **this repo's package is already
+   Public**, which is exactly what lets a stranger `up -d` without logging in,
+   and the `Verify anonymous pull` step in the workflow re-tests it on every
+   run (green badge = still pullable; a warning annotation = it flipped back to
+   private and fresh clones can no longer pull it). Keeping it private instead
+   means every host has to `docker login ghcr.io`.
+5. Want your own builds served to your users? Put your path in
+   **`.env.example`** (so every clone of your fork inherits it):
    ```ini
    SERVER_IMAGE=ghcr.io/<your-user>/<your-repo>:latest
-   SERVER_PULL_POLICY=always
    ```
-   `docker compose up -d` then pulls the CI-built image instead of compiling,
-   and step 2 above takes minutes instead of an hour. The policy line is not
-   optional: the compose default is `never` (so a local build never touches a
-   registry), which would make Compose build `ghcr.io/...` from this Dockerfile
-   instead of pulling it.
+   `SERVER_PULL_POLICY=missing` is already the default, so nothing else is
+   required — add `always` only if every `up` should re-check the registry.
+   Skip this entirely if you're happy shipping upstream's image: a fork pulls
+   it and works without any package of its own.
 
 > **The image name follows the repository name:** it is
 > `ghcr.io/<owner>/<repo-in-lowercase>:latest`. Renaming the repo afterwards
@@ -400,8 +428,8 @@ GitHub repo:
 | Variable | Default | Purpose |
 |---|---|---|
 | `MYSQL_ROOT_PASSWORD` | `wow` | MySQL root + server DB credentials (**change it**) |
-| `SERVER_IMAGE` | `trinitycore-3.4.3:local` | image the compose stack runs (built from this repo unless you point it at GHCR) |
-| `SERVER_PULL_POLICY` | `never` | `never` = build the image locally, never ask a registry (this is what keeps `pull access denied for trinitycore-3.4.3` from happening). Set `always` for a registry-hosted `SERVER_IMAGE`, `missing` to pull only when it isn't cached |
+| `SERVER_IMAGE` | `ghcr.io/kasperfriend/wotlkclassic-trinity-docker:latest` | the public prebuilt image the stack runs; set it to a local name (e.g. `trinitycore-3.4.3:local`) to compile here instead |
+| `SERVER_PULL_POLICY` | `missing` | `missing` = use the cached image, pull when it isn't there. `never` = never touch a registry (**required** with a local-only `SERVER_IMAGE`, and the pairing that prevents `pull access denied for trinitycore-3.4.3`); `always` = pull on every `up` |
 | `AUTO_DOWNLOAD_DB` | `true` | download the official DB bundle when `world` is empty |
 | `DB_URL` | upstream `databases` release | where that bundle is downloaded from (the entrypoint default, forwarded to the containers) |
 | `SOURCE_REPO` / `SOURCE_BRANCH` / `SOURCE_SHA` | `xHashii/3.4.3_Source` `main` | what the image is compiled from — set these if upstream ever moves |
@@ -412,45 +440,66 @@ GitHub repo:
 Everything has a working default, which is why step 2 runs without an `.env`
 at all. `cp .env.example .env`, edit, then `docker compose up -d` to apply.
 
-### Why the server image is built, not pulled
+### Which image you run (and why no login is ever needed)
 
-`SERVER_IMAGE` defaults to `trinitycore-3.4.3:local`. A name **without a
-registry host** is a Docker Hub name as far as the daemon is concerned
-(`trinitycore-3.4.3:local` → `docker.io/library/trinitycore-3.4.3:local`), and
-no such repository exists. So every operation that resolves the name through a
-registry answers the same sentence:
+Three lines in `docker-compose.yml` decide everything:
+
+```yaml
+image: ${SERVER_IMAGE:-ghcr.io/kasperfriend/wotlkclassic-trinity-docker:latest}
+build: *tcbuild                                   # the fallback: compile it here
+pull_policy: ${SERVER_PULL_POLICY:-missing}       # pull only when not cached
+```
+
+* **Default, nothing configured:** `up -d` pulls the **public** CI image once,
+  then starts. No `docker login`, no PAT, no account — a public GHCR package
+  answers anonymous pulls, and the workflow's *Verify anonymous pull* step
+  raises a warning annotation on every run the moment that stops being true.
+* **`build:` stays on purpose:** when the pull *can't* happen (offline,
+  registry hiccup, private package, or `SERVER_IMAGE` pinned to a local name),
+  Compose compiles the same image from this Dockerfile instead. Slower, but
+  never stuck — and `./doctor.sh` says which of the two you are about to get.
+* **Cached is cached:** with `missing`, `up` reuses the local image and does
+  *not* re-check the registry. To pick up the newest CI build:
+  `docker compose pull` (or `docker compose up -d --pull always`).
+
+A name **without a registry host** — `trinitycore-3.4.3:local` — is different:
+the daemon reads it as `docker.io/library/trinitycore-3.4.3`, which exists
+nowhere, so combining such a name with a policy that allows pulling is the one
+way to reproduce
 
 ```
 Error response from daemon: pull access denied for trinitycore-3.4.3,
 repository does not exist or may require 'docker login'
 ```
 
-…which means **“not built in this Docker engine”**, not “wrong password”:
+which means **“not built in this engine”**, never “wrong password”.
 
-| You ran | With this repo's defaults | Do this |
+| You ran | What happens | Do this |
 |---|---|---|
-| `docker compose up -d` | Compose builds the image (`build: .`, and `pull_policy: never` keeps it from asking a registry) | nothing — this is the intended flow |
-| `docker compose pull` | the three server services are **skipped** (`Skipped: pull policy is never`) and only `mysql:8.0` is pulled | nothing; if the image is missing: `docker compose build` |
-| `docker compose up --pull always` | the flag overrides the per-service policy → registry lookup → the error above | drop it (or `--pull never`) |
-| any of these on an **older Compose** (pre ~v2.24) | those releases treated a failed pull as fatal even when `build:` was present | `docker compose build` first, or update Docker Desktop |
-| `./extract-data.sh`, `extract-data.bat` | they run the extractors *inside* the image; the launchers now check the local cache first and offer to build | — |
+| `docker compose up -d` | pulls the public image, or compiles it when the pull can't happen | nothing — this is the flow |
+| `docker compose pull` | refreshes `mysql:8.0` **and** the server image from GHCR | nothing — this *is* the update command |
+| `up -d` with `SERVER_IMAGE=trinitycore-3.4.3:local` and a pulling policy | Docker Hub lookup for a name only this repo can build → the error above (fatal on Compose ≲ v2.24, otherwise a warning + a local build) | add `SERVER_PULL_POLICY=never`, or delete both lines and pull the CI image |
+| `docker compose up --pull always` | forces the registry check — fine for a GHCR name, an error for a local one | `--pull missing`, or drop it |
+| `./extract-data.sh`, `extract-data.bat` | run the extractors *inside* the image; they check the local cache, pull registry names, and otherwise offer to build | — |
 | `docker run trinitycore-3.4.3:local …` | blind pull → the error | `docker compose run --rm --no-deps bnetserver …` |
 
-The `pull_policy: never` lines themselves need Compose ≥ v2.17 (Jan 2023) — on
-anything older `docker compose config` rejects the file; upgrade, or delete the
-three `pull_policy:` lines and get used to running `docker compose build`
-before `up`. (`docker-compose` v1 never had the key at all — same remedy.)
+`pull_policy` needs Compose ≥ v2.17 (Jan 2023) and does not exist in
+`docker-compose` v1 — `./doctor.sh` detects both by letting *your* Compose parse
+the file, and tells you to run `docker compose build` first if it can't read it.
 
-Two details that turn into “but I *did* build it!”: the **tag** has to match
-(`docker build -t trinitycore-3.4.3 .` without `:local` builds a tag the stack
-never looks at), and an image built in a *different* context (WSL vs. Docker
-Desktop, or a remote `DOCKER_HOST`) is not in this engine at all —
-`docker images | grep trinitycore` is the tiebreaker. `./doctor.sh` checks all
-of it, including the launcher/`.env` combination.
+Denial even though you never touched `.env`? Then it's the tag or the engine:
+`docker build -t trinitycore-3.4.3 .` (no `:local`) builds a tag the stack never
+looks at, and an image built inside WSL is not in Docker Desktop's engine.
+`docker images \| grep -E 'trinitycore\|wotlk'` settles it — or run
+`./doctor.sh`, which also probes whether the registry would answer an anonymous
+pull of your configured image (200 public · 401/403 private · 404 wrong name).
 
-To run a real registry image instead (the daily GHCR build) set **both**
-`SERVER_IMAGE=ghcr.io/<you>/<repo>:latest` and `SERVER_PULL_POLICY=always`, and
-make the package public — see [Auto-rebuild](#auto-rebuild-poll-upstream-every-15-minutes).
+**Forks:** your own workflow pushes `ghcr.io/<you>/<fork-lowercased>`, and a
+brand-new package starts out **private** — GitHub has no API for that, so flip
+it in the UI (Packages → the package → *Change visibility* → Public), then put
+your path in `SERVER_IMAGE`. Until you do, a fork still works out of the box: it
+pulls this repo's public image. See
+[Auto-rebuild](#auto-rebuild-poll-upstream-every-15-minutes).
 
 ---
 
@@ -538,9 +587,11 @@ and the workflow builds that instead.
 | `Unable to load map and vmap data for starting zones` | `./data/maps` or `./data/vmaps` is incomplete — re-run the extractor (a bare `vmap4assembler .` produces empty vmaps) |
 | First worldserver boot takes very long | normal — full world DB import, one time (10–30 min) |
 | DB connection errors | MySQL still starting (healthcheck gates startup) or wrong `MYSQL_ROOT_PASSWORD` after first boot — delete the `mysql-data` volume to reset |
-| **`pull access denied for trinitycore-3.4.3, repository does not exist or may require 'docker login'`** | the image just isn't built in this Docker engine — `trinitycore-3.4.3:local` is a local name, no registry has it. Run `docker compose build` (or let `up -d` do it); `docker login` and `docker compose pull` cannot help. `./doctor.sh` says which case you are in · [details](#why-the-server-image-is-built-not-pulled) |
-| `docker compose pull` fails, or warns *“Some service image(s) must be built from source”* | expected: the server image is built here, not published — `docker compose build` |
-| You switched `SERVER_IMAGE` to GHCR and now it builds instead of pulling | `pull_policy` defaults to `never` → also set `SERVER_PULL_POLICY=always` in `.env` |
+| **`pull access denied for trinitycore-3.4.3, repository does not exist or may require 'docker login'`** | an old `.env` pins `SERVER_IMAGE=trinitycore-3.4.3:local`, a name no registry serves: delete the `SERVER_IMAGE`/`SERVER_PULL_POLICY` lines to pull the public CI image, or add `SERVER_PULL_POLICY=never` to build it here. `docker login` cannot help · [details](#which-image-you-run-and-why-no-login-is-ever-needed) |
+| `denied` / `manifest unknown` / `not authorized` on **`ghcr.io/…`** | the image name is fine but the package is private (true for a fork's first builds) → owner flips it to Public in the UI, or the host runs `docker login ghcr.io`; `./doctor.sh` probes it anonymously for you |
+| First `up -d` is compiling instead of pulling | your `.env` overrides `SERVER_IMAGE`, or the registry is unreachable — `./doctor.sh` says which; `docker compose build` is the deliberate version of it |
+| `docker compose pull` warns *“Some service image(s) must be built from source”* | only with a local-only `SERVER_IMAGE`: that tag can't be pulled, it is built — pair it with `SERVER_PULL_POLICY=never` or drop the override |
+| A GHCR `SERVER_IMAGE` builds instead of pulling | `SERVER_PULL_POLICY=never` left over in `.env` → set it to `missing` (or delete the line) |
 | GHCR pull denied / `manifest unknown` / `NAME_UNKNOWN` | the package is private (GHCR's default) → make it public, or `docker login ghcr.io` first |
 | `error while loading shared libraries: libmysqlclient.so.21` | you are on an image built before the runtime `libmysqlclient21` dependency was added — rebuild (`docker compose build --pull`) |
 | Want to attach consoles | `docker attach wow343-worldserver-1` (Ctrl-P Ctrl-Q to detach; bnetserver has no console) |
