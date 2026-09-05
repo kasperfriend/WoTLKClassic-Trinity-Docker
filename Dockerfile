@@ -12,7 +12,7 @@
 #               can apply sql/updates on startup)
 #
 #  The upstream commit that gets built can be pinned from CI via
-#  SOURCE_SHA (see .github/workflows/daily-rebuild.yml). Locally, a plain
+#  SOURCE_SHA (see .github/workflows/poll-and-build.yml). Locally, a plain
 #  `docker build .` always builds the latest upstream main branch.
 # ============================================================================
 

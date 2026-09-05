@@ -1,6 +1,6 @@
-# TrinityCore 3.4.3 (WotLK Classic) — Docker + Daily Rebuild
+# TrinityCore 3.4.3 (WotLK Classic) — Docker + Auto-Rebuild
 
-[![daily-rebuild](https://github.com/kasperfriend/WoTLKClassic-Trinity-Docker/actions/workflows/daily-rebuild.yml/badge.svg)](https://github.com/kasperfriend/WoTLKClassic-Trinity-Docker/actions/workflows/daily-rebuild.yml)
+[![poll-and-build](https://github.com/kasperfriend/WoTLKClassic-Trinity-Docker/actions/workflows/poll-and-build.yml/badge.svg)](https://github.com/kasperfriend/WoTLKClassic-Trinity-Docker/actions/workflows/poll-and-build.yml)
 
 A self-rebuilding Docker distribution of the
 **[xHashii/3.4.3_Source](https://github.com/xHashii/3.4.3_Source)** World of
@@ -8,8 +8,8 @@ Warcraft 3.4.3 (WotLK Classic) server (TrinityCore-based).
 
 * **Builds** `worldserver`, `bnetserver` and the map/vmap/mmap extractor
   tools from the upstream source — in Docker, on every run.
-* **Rebuilds daily at 06:00 Europe/Kiev** via GitHub Actions, always from
-  the latest upstream commit, and publishes the image to GHCR.
+* **Rebuilds itself** via GitHub Actions: polls upstream every 15 minutes and
+  builds + publishes to GHCR only when there is a commit it hasn't built yet.
 * **Runs the whole stack** with one command: MySQL 8 + logon server +
   world server, with databases created and populated automatically.
 
@@ -22,7 +22,7 @@ WoTLKClassic-Trinity-Docker/
 ├── Dockerfile                        # multi-stage: clone upstream → compile → slim runtime
 ├── docker-compose.yml                # mysql + bnetserver + worldserver stack
 ├── .env.example                      # copy to .env and edit
-├── .github/workflows/daily-rebuild.yml  # the 06:00 Europe/Kiev daily pipeline
+├── .github/workflows/poll-and-build.yml # polls upstream, builds only on new commits
 ├── runtime/
 │   ├── entrypoint.sh                 # DB wait → create DBs → import → render conf → start
 │   └── healthcheck.sh                # container health (process + port)
@@ -49,9 +49,10 @@ Either **build it locally right now** (the default — nothing else to do):
 docker build -t trinitycore-3.4.3:local .
 ```
 
-…or **pull the daily-built image** from your GHCR once the workflow has run
-(see [Daily rebuild](#daily-rebuild-at-0600-europekiev) — the package has to be
-made **public** first, or the host pulling it must `docker login ghcr.io`):
+…or **pull the CI-built image** from your GHCR once the workflow has run
+(see [Auto-rebuild](#auto-rebuild-poll-upstream-every-15-minutes) — the package
+has to be made **public** first, or the host pulling it must
+`docker login ghcr.io`):
 
 ```bash
 docker pull ghcr.io/<your-github-username>/<your-repo>:latest
@@ -125,33 +126,38 @@ account create myuser mypass
 
 ---
 
-## Daily rebuild at 06:00 Europe/Kiev
+## Auto-rebuild: poll upstream every 15 minutes
 
-The included workflow (`.github/workflows/daily-rebuild.yml`) on your
+The included workflow (`.github/workflows/poll-and-build.yml`) on your
 GitHub repo:
 
-1. **Triggers every day at 06:00 Kyiv time.** GitHub cron is UTC and
-   Ukraine flips between UTC+2 and UTC+3, so the workflow registers both
-   `03:00` and `04:00` UTC and a guard step only lets the run continue
-   when the local Kyiv hour is really `06` — exact local time all year,
-   DST-proof.
-2. Resolves the **latest commit** of `xHashii/3.4.3_Source`.
+1. **Polls `xHashii/3.4.3_Source` every 15 minutes** (`*/15 * * * *`) and
+   resolves its latest commit.
+2. **Skips the build when that commit is already published** — it asks GHCR
+   whether `sha-<short-commit>` exists. If it does, the run exits doing
+   nothing, so the 96 runs a day cost almost nothing. Manual
+   (**Run workflow**) and `push`-to-`main` runs always rebuild.
 3. Builds the image from that exact commit (`SOURCE_SHA` build-arg → the
    clone is pinned, and the image is tagged `sha-<short>`).
 4. Pushes to **GHCR**:
    * `ghcr.io/<your-user>/<your-repo>:latest`
-   * `ghcr.io/<your-user>/<your-repo>:YYYY.MM.DD` (Kyiv date)
+   * `ghcr.io/<your-user>/<your-repo>:YYYY.MM.DD` (UTC date)
    * `ghcr.io/<your-user>/<your-repo>:sha-<upstream-short-sha>`
-5. **Smoke-tests** the image (all binaries link-check clean, bnetserver
-   prints its banner) and writes a job summary with the built commit.
+5. **Smoke-tests** the image: every binary link-checks clean,
+   `bnetserver --version` runs, and a real `mysql` + `bnetserver` stack is
+   brought up with `docker compose` and must reach *healthy* (process
+   running **and** port 1119 listening).
+
+> Adjust the cadence by editing the `cron:` line — `*/15` is a good default;
+> hourly (`0 * * * *`) is plenty if you don't need same-day upstream fixes.
 
 ### One-time setup
 
 1. Push this folder to a **new GitHub repository**.
 2. `Settings → Actions → General`: allow *Read and write* if your org
    restricts the default `GITHUB_TOKEN` (most personal repos need nothing).
-3. Push to `main` triggers a build immediately; afterwards it runs daily
-   at 06:00 Kyiv. You can always hit **Run workflow** for a manual build.
+3. Push to `main` triggers a build immediately; afterwards the poller runs
+   every 15 minutes. You can always hit **Run workflow** to force a build.
 4. **Make the image pullable — this step is mandatory if anyone but you should
    pull it.** GHCR packages are **private by default**, so a fresh
    `docker pull` fails with `denied`/`manifest unknown` until you go to your
@@ -159,7 +165,8 @@ GitHub repo:
    Public*. (Or keep it private and `docker login ghcr.io` on every host that
    pulls it.)
 5. Put `ghcr.io/<your-user>/<your-repo>:latest` into `SERVER_IMAGE` in
-   your `.env` and `docker compose up -d` uses the daily image.
+   your `.env` and `docker compose up -d` uses the CI-built image instead of
+   building locally.
 
 > **The image name follows the repository name:** it is
 > `ghcr.io/<owner>/<repo-in-lowercase>:latest`. Renaming the repo afterwards

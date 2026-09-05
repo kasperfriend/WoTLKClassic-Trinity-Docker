@@ -1,8 +1,7 @@
 # ============================================================================
 #  Poll upstream & build — checks xHashii/3.4.3_Source every 15 minutes for
 #  a commit that hasn't been built yet, and only builds/pushes when one shows
-#  up. No fixed daily time, no DST handling needed — replaces the old
-#  schedule-based daily-rebuild.yml.
+#  up. No fixed daily time and no DST handling needed.
 #
 #  How "already built?" is decided: it asks GHCR directly whether an image
 #  tagged sha-<short-commit> already exists. If it does, this exact commit
