@@ -1,5 +1,4 @@
-# TEMPORARY: the exact user journey — fresh clone, cp .env.example .env,
-# docker compose up -d. Nothing pre-built, nothing pre-created.
+# TEMPORARY: is worldserver stable, and what exactly stops it with no client data?
 name: ci-freshclone
 
 on:
@@ -8,7 +7,6 @@ on:
     branches: ["arena/**"]
     paths:
       - ".github/workflows/ci-freshclone.yml"
-      - "runtime/entrypoint.sh"
 
 permissions:
   contents: write
@@ -23,83 +21,56 @@ jobs:
         with:
           fetch-depth: 1
 
-      - name: Clone and up
+      - name: Run
         shell: bash
         continue-on-error: true
         run: |
           set +e
           R="$GITHUB_WORKSPACE/ci-fresh-report.md"
-          echo "# fresh-clone report ($(date -u +%FT%TZ))" > "$R"
-
-          echo "" >> "$R"; echo "## 1. clone + cp .env.example .env + docker compose up -d" >> "$R"; echo '```' >> "$R"
+          echo "# worldserver stability report ($(date -u +%FT%TZ))" > "$R"
           rm -rf "$HOME/srv"
           git clone -q -b "$GITHUB_REF_NAME" --depth 1 \
-            "https://github.com/$GITHUB_REPOSITORY.git" "$HOME/srv" >> "$R" 2>&1 \
-            && echo "CLONE_OK ($(git -C "$HOME/srv" rev-parse --short HEAD))" >> "$R" || echo "CLONE_FAILED" >> "$R"
+            "https://github.com/$GITHUB_REPOSITORY.git" "$HOME/srv" >> "$R" 2>&1
           cd "$HOME/srv"
-          ls -la >> "$R" 2>&1
           cp .env.example .env
-          echo "--- host folders BEFORE up:" >> "$R"
-          for d in data etc logs import; do [ -d "$d" ] && echo "  $d exists" >> "$R" || echo "  $d absent (expected)"; done
-          echo "--- docker compose up -d (no prior docker build):" >> "$R"
+
+          echo "" >> "$R"; echo "## 1. up" >> "$R"; echo '```' >> "$R"
           timeout 2400 docker compose up -d >> "$R" 2>&1
           echo "  up exit=$?" >> "$R"
-          docker images trinitycore-3.4.3:local >> "$R" 2>&1
           echo '```' >> "$R"
 
-          echo "" >> "$R"; echo "## 2. host folders AFTER up" >> "$R"; echo '```' >> "$R"
-          for d in data etc logs import import/world; do
-            [ -d "$d" ] && echo "  $d  [$(ls -A "$d" 2>/dev/null | tr '\n' ' ')]" >> "$R" || echo "  $d  MISSING" >> "$R"
-          done
-          ls -ld data etc logs import >> "$R" 2>&1
-          echo '```' >> "$R"
-
-          echo "" >> "$R"; echo "## 3. world DB download + import" >> "$R"; echo '```' >> "$R"
-          prev=-1; stable=0
-          for i in $(seq 1 80); do
-            S="$(docker inspect --format '{{.State.Status}}' wow343-worldserver-1 2>/dev/null || echo missing)"
-            W="$(docker compose exec -T mysql mysql -uroot -pwow -N -e \
-                 'SELECT COUNT(*) FROM information_schema.tables WHERE table_schema="world";' 2>/dev/null | tr -d '[:space:]')"
-            E="$(docker logs wow343-worldserver-1 2>&1 | grep -ac '^ERROR')"
-            STARTED="$(docker logs wow343-worldserver-1 2>&1 | grep -ac 'Using configuration file')"
-            echo "  t=$((i*30))s worldserver=$S world_tables=${W:-?} import_errors=$E started=$STARTED" >> "$R"
-            [ "${STARTED:-0}" -gt 0 ] && { echo "  -> worldserver reached startup" >> "$R"; break; }
-            # only count stability once the import has actually begun
-            if [ "${W:-0}" -gt 0 ] && [ "${W:-0}" = "$prev" ]; then stable=$((stable+1)); else stable=0; fi
-            prev="${W:-0}"
-            [ "$stable" -ge 6 ] && { echo "  -> table count stable for 3 min" >> "$R"; break; }
+          echo "" >> "$R"; echo "## 2. worldserver over 10 minutes" >> "$R"; echo '```' >> "$R"
+          for i in $(seq 1 20); do
+            RC="$(docker inspect --format '{{.RestartCount}}' wow343-worldserver-1 2>/dev/null || echo '?')"
+            S="$(docker inspect --format '{{.State.Status}} exit={{.State.ExitCode}}' wow343-worldserver-1 2>/dev/null || echo missing)"
+            BH="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' wow343-bnetserver-1 2>/dev/null || echo missing)"
+            echo "  t=$((i*30))s worldserver[$S] restarts=$RC bnetserver=$BH" >> "$R"
             sleep 30
           done
-          echo "--- final table counts:" >> "$R"
+          echo '```' >> "$R"
+
+          echo "" >> "$R"; echo "## 3. worldserver: how far did it get?" >> "$R"; echo '```' >> "$R"
+          echo "--- milestones reached:" >> "$R"
+          docker logs wow343-worldserver-1 2>&1 | tr -d '\000' \
+            | grep -aE "Using configuration file|Updating .* database|is up-to-date|Realm running|Using World DB|Initialize|Loading|World initialized|Map|dbc|DBC|Gameobject|Creature|Starting" \
+            | sort -u | head -40 >> "$R" 2>&1
+          echo "--- data / map / dbc related lines:" >> "$R"
+          docker logs wow343-worldserver-1 2>&1 | tr -d '\000' \
+            | grep -aiE "data|maps|vmaps|mmaps|dbc|not exist|cannot|failed|error|fatal|unable|missing" \
+            | grep -avE "Missing name|SQLDriver|database at" | sort -u | head -30 >> "$R" 2>&1
+          echo "--- last 20 lines:" >> "$R"
+          docker logs --tail 20 wow343-worldserver-1 2>&1 | tr -d '\000' | grep -av '^[ /\\_]*$' >> "$R" 2>&1
+          echo '```' >> "$R"
+
+          echo "" >> "$R"; echo "## 4. final state" >> "$R"; echo '```' >> "$R"
+          docker compose ps >> "$R" 2>&1
           docker compose exec -T mysql mysql -uroot -pwow -N -e \
             'SELECT table_schema, COUNT(*) FROM information_schema.tables WHERE table_schema IN ("auth","characters","world","hotfixes") GROUP BY table_schema;' >> "$R" 2>&1
-          echo "--- EVERY import error line (should be none):" >> "$R"
-          docker logs wow343-worldserver-1 2>&1 | grep -a '^ERROR' | sort | uniq -c | head -40 >> "$R" 2>&1
-          echo "  total ERROR lines: $(docker logs wow343-worldserver-1 2>&1 | grep -ac '^ERROR')" >> "$R"
-          echo '```' >> "$R"
-
-          echo "" >> "$R"; echo "## 4. configs on the host + edit persistence" >> "$R"; echo '```' >> "$R"
-          ls -l etc >> "$R" 2>&1
-          echo "--- effective settings (worldserver):" >> "$R"
-          grep -E "^(LoginDatabaseInfo|WorldDatabaseInfo|DataDir|LogsDir|SourceDirectory)" etc/worldserver.conf >> "$R" 2>&1
-          echo "--- effective settings (bnetserver):" >> "$R"
-          grep -E "^(LoginDatabaseInfo|LogsDir|CertificatesFile|PrivateKeyFile)" etc/bnetserver.conf >> "$R" 2>&1
-          sed -i 's/^LoginREST\.Port *=.*/LoginREST.Port = 9999/' etc/bnetserver.conf
-          echo "# USER_EDIT_MARKER" >> etc/bnetserver.conf
-          docker compose restart bnetserver >> "$R" 2>&1
-          for _ in $(seq 1 24); do
-            H="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' wow343-bnetserver-1 2>/dev/null || echo missing)"
-            [ "$H" = healthy ] && break; sleep 5
+          echo "  import ERROR lines: $(docker logs wow343-worldserver-1 2>&1 | grep -ac '^ERROR')" >> "$R"
+          echo "--- ports actually listening:" >> "$R"
+          for p in 1119 8081 8085; do
+            (exec 3<>/dev/tcp/127.0.0.1/$p) 2>/dev/null && echo "  $p OPEN" >> "$R" || echo "  $p closed" >> "$R"
           done
-          echo "  bnetserver health after edit+restart: $H" >> "$R"
-          grep -q "USER_EDIT_MARKER" etc/bnetserver.conf && echo "MARKER_PERSISTED" >> "$R" || echo "MARKER_LOST" >> "$R"
-          grep -q "^LoginREST.Port = 9999" etc/bnetserver.conf && echo "SETTING_PERSISTED" >> "$R" || echo "SETTING_LOST" >> "$R"
-          echo '```' >> "$R"
-
-          echo "" >> "$R"; echo "## 5. where worldserver gets to without client data" >> "$R"; echo '```' >> "$R"
-          docker compose ps >> "$R" 2>&1
-          echo "--- last 30 worldserver log lines:" >> "$R"
-          docker logs --tail 30 wow343-worldserver-1 2>&1 | tr -d '\000' | grep -av '^[ /\\_]*$' >> "$R" 2>&1
           echo '```' >> "$R"
           docker compose down -v >> /dev/null 2>&1
 
@@ -109,10 +80,9 @@ jobs:
         run: |
           cd "$GITHUB_WORKSPACE"
           [ -f ci-fresh-report.md ] || echo "no report" > ci-fresh-report.md
-          cat ci-fresh-report.md
           git config user.name "arena-diagnostic[bot]"
           git config user.email "arena-diagnostic[bot]@users.noreply.github.com"
           git add ci-fresh-report.md
-          git commit -m "ci: fresh-clone report" || echo "nothing to commit"
+          git commit -m "ci: worldserver stability report" || echo "nothing to commit"
           git pull --rebase origin "$GITHUB_REF_NAME" || true
           git push origin "HEAD:$GITHUB_REF_NAME"
