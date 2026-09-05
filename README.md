@@ -152,13 +152,6 @@ GitHub repo:
    restricts the default `GITHUB_TOKEN` (most personal repos need nothing).
 3. Push to `main` triggers a build immediately; afterwards it runs daily
    at 06:00 Kyiv. You can always hit **Run workflow** for a manual build.
-> **The image name follows the repository name:** it is
-> `ghcr.io/<owner>/<repo-in-lowercase>:latest`. Renaming the repo afterwards
-> does **not** rename a package that was already pushed — the old name keeps
-> working and the next build creates a *second* package under the new name
-> (which starts out **private**). Delete the stale package, or keep pulling the
-> old name.
-
 4. **Make the image pullable — this step is mandatory if anyone but you should
    pull it.** GHCR packages are **private by default**, so a fresh
    `docker pull` fails with `denied`/`manifest unknown` until you go to your
@@ -167,6 +160,13 @@ GitHub repo:
    pulls it.)
 5. Put `ghcr.io/<your-user>/<your-repo>:latest` into `SERVER_IMAGE` in
    your `.env` and `docker compose up -d` uses the daily image.
+
+> **The image name follows the repository name:** it is
+> `ghcr.io/<owner>/<repo-in-lowercase>:latest`. Renaming the repo afterwards
+> does **not** rename a package that was already pushed — the old name keeps
+> working and the next build creates a *second* package under the new name
+> (which starts out **private**). Delete the stale package, or keep pulling the
+> old name.
 
 ---
 
