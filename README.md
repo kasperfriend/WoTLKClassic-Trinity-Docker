@@ -22,17 +22,13 @@ WoTLKClassic-Trinity-Docker/
 ├── Dockerfile                        # multi-stage: clone upstream → compile → slim runtime
 ├── docker-compose.yml                # mysql + bnetserver + worldserver stack
 ├── .env.example                      # copy to .env and edit
-├── .github/workflows/
-│   ├── poll-and-build.yml            # polls upstream, builds only on new commits
-│   └── build-windows-tools.yml       # builds the Windows extractor .exe zip
-├── runtime/
-│   ├── entrypoint.sh                 # DB wait → create DBs → import → render conf → start
-│   └── healthcheck.sh                # container health (process + port)
-└── helpers/
-    ├── extract-data.sh               # Linux: extract via the Docker image
-    └── windows/                      # packaged into the Windows tools zip
-        ├── Extract-Data.bat          # double-click extractor for Windows users
-        └── README.txt
+├── .github/workflows/poll-and-build.yml # polls upstream, builds only on new commits
+└── runtime/
+    ├── entrypoint.sh                 # DB wait → create DBs → import → render conf → start
+    ├── export-tools.sh               # copies extractors + launchers to the repo root
+    └── healthcheck.sh                # container health (process + port)
+
+  (generated on `up -d`, git-ignored: ./tools, extract-data.sh, extract-data.bat)
 ```
 
 ## Requirements
@@ -103,56 +99,52 @@ Later boots take seconds.
 ### 4. Extract client data (dbc / maps / vmaps / mmaps / gt / cameras)
 
 The world DB alone isn't enough — worldserver also needs data extracted
-**from the 3.4.3 client**. Pick whichever fits where your client lives.
+**from the 3.4.3 client**. You already have everything you need: `docker
+compose up -d` dropped the extractors into this folder for you.
 
-Either way, expect **1–4 hours** (`mmaps_generator` is the slow part) and
-~25 GB of free disk. **All the folders matter** — worldserver refuses to start
-without `dbc/`, `maps/`, `vmaps/`, `mmaps/` *and* `gt/`. Until they are there
-the worldserver container prints what is missing and waits, re-checking every
-60 s, so you can extract while the stack is already up.
-
-#### Windows client → download the ready-made `.exe` tools
-
-Most people have the client on Windows. Grab the prebuilt extractors — no
-Docker, no compiler, nothing to install:
-
-**[Releases → Windows extractor tools → `wow343-extractors-windows-x64.zip`](../../releases/tag/extractors)**
-
-1. Unzip it **into your client folder** — the one with `Wow.exe`:
-
-   ```
-   C:\Games\WoW 3.4.3\
-       Wow.exe
-       Data\
-       mapextractor.exe
-       vmap4extractor.exe
-       vmap4assembler.exe
-       mmaps_generator.exe
-       Extract-Data.bat      <-- double-click this
-   ```
-
-2. Double-click **`Extract-Data.bat`** and confirm.
-3. When it finishes, copy the produced `dbc`, `maps`, `vmaps`, `mmaps`, `gt`
-   and `cameras` folders into this repo's **`data/`** folder (next to
-   `docker-compose.yml`).
-
-The batch file runs the four tools in the right order with the right
-arguments, cleans up the ~10 GB `Buildings` intermediate, and refuses to
-finish silently if a required folder wasn't produced.
-
-> The zip is rebuilt weekly by
-> [`build-windows-tools.yml`](.github/workflows/build-windows-tools.yml)
-> (MSVC, `SERVERS=OFF TOOLS=ON`). Trigger it by hand from the **Actions** tab
-> the first time — the release doesn't exist until the workflow has run once.
-
-#### Linux client → use the Docker image you already built
-
-```bash
-./helpers/extract-data.sh /path/to/3.4.3/client
+```
+WoTLKClassic-Trinity-Docker/
+├── extract-data.sh     <- Linux / macOS: run this
+├── extract-data.bat    <- Windows: drag your client folder onto it
+└── tools/              <- the raw extractor binaries
 ```
 
-This runs the same four tools inside the image and moves the results into
-`./data/` for you — nothing to copy by hand.
+**Linux / macOS:**
+
+```bash
+./extract-data.sh /path/to/3.4.3/client
+```
+
+**Windows:** drag your WoW 3.4.3 folder (the one with `Wow.exe`) onto
+`extract-data.bat`, or run it from a terminal:
+
+```bat
+extract-data.bat "C:\Games\WoW 3.4.3"
+```
+
+That's it — the launcher runs all four tools in the right order and moves
+`dbc/`, `maps/`, `vmaps/`, `mmaps/`, `gt/` and `cameras/` into `./data/` for
+you. Nothing to copy by hand.
+
+Expect **1–4 hours** (`mmaps_generator` is the slow part) and ~25 GB of free
+disk. **All the folders matter** — worldserver refuses to start without
+`dbc/`, `maps/`, `vmaps/`, `mmaps/` *and* `gt/`, and the launcher stops with
+an error rather than leaving you a half-extracted `./data`. Until the data is
+there the worldserver container prints what's missing and waits, re-checking
+every 60 s, so you can extract while the stack is already up — no restart
+needed.
+
+> **How the tools get there:** a one-shot `extractors` service copies them out
+> of the image on every `up -d` (and refreshes them when you rebuild). It exits
+> immediately and never touches the running servers. `./tools`,
+> `extract-data.sh` and `extract-data.bat` are generated, so they're
+> git-ignored.
+>
+> The binaries are Linux executables. On a **Linux host** `extract-data.sh`
+> runs them natively out of `./tools` (their non-glibc libraries are bundled in
+> `./tools/lib`). On **Windows/macOS** they can't run on the host, so the
+> launcher runs them inside the image you already built — Docker just needs to
+> be running.
 
 #### Running the tools by hand
 
@@ -165,10 +157,12 @@ vmap4assembler Buildings vmaps
 mmaps_generator
 ```
 
-`vmap4assembler .` does **not** work — `vmap4extractor` writes its raw output
-into `Buildings/`, and the assembler has to be pointed at it. Getting this
-wrong yields an empty `vmaps/` and the server then dies with *"Unable to load
-map and vmap data for starting zones"*.
+On Linux use `./tools/run-tool.sh <tool> [args]` so the bundled libraries are
+picked up. Note that `vmap4assembler .` does **not** work — `vmap4extractor`
+writes its raw output into `Buildings/`, and the assembler has to be pointed
+at it. Getting this wrong yields an empty `vmaps/` and the server then dies
+with *"Unable to load map and vmap data for starting zones"*. The `Buildings/`
+intermediate is ~10 GB and is deleted for you when extraction finishes.
 
 ### 5. Create an account & log in
 
@@ -271,7 +265,7 @@ four on first `up`.
 
 | On your PC | In the container | What goes there |
 |---|---|---|
-| `./data` | `/opt/tc/data` | Client data: `dbc/`, `maps/`, `vmaps/`, `mmaps/`, `gt/`, `cameras/` (from `helpers/extract-data.sh`) |
+| `./data` | `/opt/tc/data` | Client data: `dbc/`, `maps/`, `vmaps/`, `mmaps/`, `gt/`, `cameras/` (from `./extract-data.sh`) |
 | `./etc` | `/opt/tc/conf` | **`worldserver.conf` and `bnetserver.conf` — yours to edit** |
 | `./logs` | `/opt/tc/logs` | Server log files (`Worldserver.log`, `Bnet.log`, …) |
 | `./import/world` | `/opt/tc/import/world` | Your own `*.sql` dumps, imported on the next boot |
@@ -329,8 +323,9 @@ and the workflow builds that instead.
 | Symptom | Fix |
 |---|---|
 | worldserver logs `Waiting for import files` | world DB is empty — either let the DB bundle download (`AUTO_DOWNLOAD_DB=true`) or drop dumps into `./import/world/` |
-| worldserver logs `client data is missing or empty in ./data` | run `helpers/extract-data.sh` with your 3.4.3 client; the container picks the data up on its own within 60 s |
-| `Some required *.txt GameTable files not found` | `./data/gt` is missing — re-run the extractor (older versions of the helper script did not copy `gt/`) |
+| worldserver logs `client data is missing or empty in ./data` | run `./extract-data.sh` (or `extract-data.bat`) with your 3.4.3 client; the container picks the data up on its own within 60 s |
+| `Some required *.txt GameTable files not found` | `./data/gt` is missing — re-run the extractor |
+| No `extract-data.sh` / `tools/` in the repo folder | the `extractors` service didn't run — `docker compose up -d extractors` and check `docker compose logs extractors` |
 | `Unable to load map and vmap data for starting zones` | `./data/maps` or `./data/vmaps` is incomplete — re-run the extractor |
 | First worldserver boot takes very long | normal — full world DB import, one time (10–30 min) |
 | DB connection errors | MySQL still starting (healthcheck gates startup) or wrong `MYSQL_ROOT_PASSWORD` after first boot — delete the `mysql-data` volume to reset |

@@ -118,7 +118,9 @@ COPY --from=builder /src/src/server/bnetserver/bnetserver.key.pem /opt/tc/etc/
 
 COPY runtime/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY runtime/healthcheck.sh /usr/local/bin/healthcheck.sh
+COPY runtime/export-tools.sh /usr/local/bin/export-tools.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/healthcheck.sh \
+      /usr/local/bin/export-tools.sh \
  && mkdir -p /opt/tc/data /opt/tc/logs /opt/tc/import/world /opt/tc/conf
 
 ENV TZ=UTC \

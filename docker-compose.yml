@@ -7,7 +7,7 @@
 #  Start:            docker compose up -d
 #  First boot:       downloads the TDB 3.4.3 world DB and imports it
 #                    (10–30 min — watch `docker compose logs -f worldserver`)
-#  Client data:      run helpers/extract-data.sh, data lands in ./data
+#  Client data:      run ./extract-data.sh (or .bat), data lands in ./data
 # ============================================================================
 name: wow343
 
@@ -94,6 +94,26 @@ services:
       timeout: 5s
       retries: 5
       start_period: 45m   # first boot imports the whole world DB
+
+  # --------------------------------------------------------------------------
+  # One-shot: copies the extractor tools out of the image into the repo root
+  # (./tools) and generates ./extract-data.sh + ./extract-data.bat, so users
+  # get working extractors from `docker compose up -d` without touching Docker
+  # again. Exits immediately; `up -d` does not wait for it.
+  # --------------------------------------------------------------------------
+  extractors:
+    image: ${SERVER_IMAGE:-trinitycore-3.4.3:local}
+    build: .
+    entrypoint: ["/usr/local/bin/export-tools.sh"]
+    environment:
+      EXPORT_DIR: /export
+      # Baked into the generated launchers so they drive the same image.
+      SERVER_IMAGE_REF: ${SERVER_IMAGE:-trinitycore-3.4.3:local}
+    volumes:
+      # The repo root itself — this is what lets the service write
+      # ./tools, ./extract-data.sh and ./extract-data.bat next to this file.
+      - .:/export
+    restart: "no"
 
 volumes:
   mysql-data:
