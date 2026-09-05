@@ -1,6 +1,7 @@
-# TEMPORARY diagnostic workflow — identifies why the daily-rebuild smoke test
-# failed, and reports the findings back into the repo (this sandbox cannot read
-# Actions log archives, so the report is committed as a file).
+# TEMPORARY diagnostic workflow.
+# This sandbox has no Docker and cannot reach ghcr.io or read Actions log
+# archives, so this workflow builds the image on a runner and commits the
+# findings back as files the sandbox can read through the GitHub API.
 name: ci-smoke-diagnose
 
 on:
@@ -16,116 +17,115 @@ permissions:
   packages: read
 
 jobs:
-  diagnose:
+  registry:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Query GHCR
+        shell: bash
+        continue-on-error: true
+        run: |
+          R="ci-registry-report.md"
+          echo "# GHCR registry report ($(date -u +%FT%TZ))" > "$R"
+          TOK_JSON="$(curl -s -u "ignored:${{ secrets.GITHUB_TOKEN }}" \
+            "https://ghcr.io/token?scope=repository:kasperfriend/wotlkclassic-trinity-docker:pull" || true)"
+          TOK="$(printf '%s' "$TOK_JSON" | sed -n 's/.*"token":"\([^"]*\)".*/\1/p')"
+          echo "- anonymous/token token obtained: $([ -n "$TOK" ] && echo yes || echo no)" >> "$R"
+          for NAME in \
+            kasperfriend/wotlkclassic-trinity-docker \
+            kasperfriend/trinitycore-3.4.3 ; do
+            echo "" >> "$R"
+            echo "## $NAME" >> "$R"
+            echo '```' >> "$R"
+            curl -s -o /tmp/tags.json -w "tags/list HTTP %{http_code}\n" \
+              ${TOK:+-H "Authorization: Bearer $TOK"} \
+              "https://ghcr.io/v2/$NAME/tags/list" >> "$R" 2>&1
+            cat /tmp/tags.json >> "$R" 2>/dev/null; echo >> "$R"
+            for TAG in latest 2026.09.05; do
+              curl -s -o /dev/null -w "  HEAD $NAME:$TAG -> HTTP %{http_code}\n" \
+                ${TOK:+-H "Authorization: Bearer $TOK"} \
+                -H "Accept: application/vnd.oci.image.index.v1+json" \
+                "https://ghcr.io/v2/$NAME/manifests/$TAG" >> "$R" 2>&1
+            done
+            echo '```' >> "$R"
+          done
+          cat "$R"
+      - name: Publish
+        if: always()
+        shell: bash
+        run: |
+          [ -f ci-registry-report.md ] || echo "no registry report" > ci-registry-report.md
+          git config user.name  "arena-diagnostic[bot]"
+          git config user.email "arena-diagnostic[bot]@users.noreply.github.com"
+          git add ci-registry-report.md
+          git commit -m "ci: registry report" || echo "nothing to commit"
+          git pull --rebase origin "$GITHUB_REF_NAME" || true
+          git push origin "HEAD:$GITHUB_REF_NAME"
+
+  build:
+    needs: registry
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          fetch-depth: 0
 
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Diagnose image
-        continue-on-error: true
+      - name: Build the CURRENT (unfixed) Dockerfile from main
         shell: bash
         run: |
-          REPORT="$PWD/ci-smoke-report.md"
-          IMAGE="ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]'):latest"
-          {
-            echo "# smoke diagnosis"
-            echo ""
-            echo "- image attempted: \`$IMAGE\`"
-            echo "- generated: $(date -u +%FT%TZ)"
-            echo ""
-          } > "$REPORT"
-          w() { echo "$@" | tee -a "$REPORT"; }
+          git show origin/main:Dockerfile > Dockerfile.main 2>/dev/null || git show main:Dockerfile > Dockerfile.main
+          echo "== building image exactly as a user would (Dockerfile from main) =="
+          docker build -f Dockerfile.main -t unfixed:latest . 2>&1 | tail -40
 
-          w "## 1. pull"
-          docker pull "$IMAGE" >> "$REPORT" 2>&1 && w "PULL_OK" || w "PULL_FAILED"
-
-          if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
-            w ""
-            w "## 1b. fallback candidates"
-            for CAND in \
-              "ghcr.io/kasperfriend/wotlkclassic-trinity-docker:latest" \
-              "ghcr.io/kasperfriend/trinitycore-3.4.3:latest" ; do
-              w "- trying $CAND"
-              if docker pull "$CAND" >> "$REPORT" 2>&1; then
-                w "  PULL_OK -> using $CAND"
-                IMAGE="$CAND"; break
-              else
-                w "  PULL_FAILED"
-              fi
-            done
+      - name: Inspect the unfixed image
+        shell: bash
+        continue-on-error: true
+        run: |
+          R="ci-build-report.md"
+          echo "# build report ($(date -u +%FT%TZ))" > "$R"
+          echo "" >> "$R"
+          echo "## A. unfixed image (Dockerfile from main): ldd" >> "$R"
+          echo '```' >> "$R"
+          docker run --rm --network none --entrypoint /bin/bash unfixed:latest -c '
+            for b in /opt/tc/bin/*; do echo "--- $b"; ldd "$b" 2>&1 | grep -E "not found|mysql|mariadb|boost|ssl|readline"; done
+            echo "=== mysql/mariadb sonames present in image ==="
+            ldconfig -p | grep -iE "mysql|mariadb" || echo "(none)"
+            echo "=== installed mysql/mariadb packages ==="
+            dpkg -l | grep -iE "mysql|mariadb" || echo "(none)"
+          ' >> "$R" 2>&1
+          echo '```' >> "$R"
+          echo "" >> "$R"
+          echo "## B. unfixed image: the EXACT daily-rebuild link check" >> "$R"
+          echo '```' >> "$R"
+          if docker run --rm --network none --entrypoint /bin/bash unfixed:latest -c '
+              set -e
+              for b in /opt/tc/bin/*; do
+                if ldd "$b" | grep -q "not found"; then
+                  echo "MISSING LIBS in $b:"; ldd "$b" | grep "not found"; exit 1
+                fi
+              done
+              echo "ALL_BINARIES_LINK_OK"'; then
+            echo "LINKCHECK_PASS" >> "$R"
+          else
+            echo "LINKCHECK_FAIL  <-- this is what fails the daily-rebuild smoke test" >> "$R"
           fi
+          echo '```' >> "$R"
+          echo "" >> "$R"
+          echo "## C. unfixed image: bnetserver banner check" >> "$R"
+          OUT="$(docker run --rm --network none --entrypoint /opt/tc/bin/bnetserver unfixed:latest \
+                 -c /opt/tc/etc/bnetserver.conf.dist 2>&1 | head -30)" || true
+          echo '```' >> "$R"; echo "$OUT" >> "$R"; echo '```' >> "$R"
+          echo "$OUT" | grep -qiE "bnetserver|TrinityCore" && echo "BANNER_PASS" >> "$R" || echo "BANNER_FAIL" >> "$R"
+          cat "$R"
 
-          if docker image inspect "$IMAGE" >/dev/null 2>&1; then
-            w ""
-            w "## 2. ldd of every binary"
-            docker run --rm --network none --entrypoint /bin/bash "$IMAGE" -c '
-              for b in /opt/tc/bin/*; do echo "--- $b"; ldd "$b" 2>&1; done
-              echo "=== ldconfig mysql/mariadb sonames in image ==="
-              ldconfig -p | grep -iE "mysql|mariadb" || echo "(none)"
-              echo "=== installed mysql/mariadb packages ==="
-              dpkg -l | grep -iE "mysql|mariadb" || echo "(none)"
-            ' >> "$REPORT" 2>&1
-
-            w ""
-            w "## 3. exact CI link check"
-            if docker run --rm --network none --entrypoint /bin/bash "$IMAGE" -c '
-                set -e
-                for b in /opt/tc/bin/*; do
-                  if ldd "$b" | grep -q "not found"; then
-                    echo "MISSING LIBS in $b:"; ldd "$b" | grep "not found"; exit 1
-                  fi
-                done
-                echo "ALL_BINARIES_LINK_OK"'; then
-              w "LINKCHECK_PASS"
-            else
-              w "LINKCHECK_FAIL"
-            fi
-
-            w ""
-            w "## 4. exact CI bnetserver banner check"
-            OUT="$(docker run --rm --network none --entrypoint /opt/tc/bin/bnetserver "$IMAGE" \
-                   -c /opt/tc/etc/bnetserver.conf.dist 2>&1 | head -40)" || true
-            echo '```' >> "$REPORT"; echo "$OUT" >> "$REPORT"; echo '```' >> "$REPORT"
-            echo "$OUT" | grep -qiE "bnetserver|TrinityCore" && w "BANNER_PASS" || w "BANNER_FAIL"
-
-            w ""
-            w "## 5. image layout"
-            docker run --rm --network none --entrypoint /bin/bash "$IMAGE" -c '
-              ls -l /opt/tc /opt/tc/bin /opt/tc/etc
-              echo "--- sql tree"; ls /opt/tc/sql; ls /opt/tc/sql/base
-              echo "--- entrypoints"; ls -l /usr/local/bin/entrypoint.sh /usr/local/bin/healthcheck.sh
-            ' >> "$REPORT" 2>&1
-          fi
-
-          w ""
-          w "## 6. candidate fix: libmysqlclient21 in ubuntu:24.04"
-          docker run --rm ubuntu:24.04 bash -c '
-            apt-get update -qq >/dev/null 2>&1
-            apt-get install -y --no-install-recommends libmysqlclient21 >/dev/null 2>&1 \
-              && { echo "libmysqlclient21 INSTALL_OK"; dpkg -L libmysqlclient21 | grep "\.so"; } \
-              || echo "libmysqlclient21 INSTALL_FAILED"
-          ' >> "$REPORT" 2>&1
-
-          echo "=== REPORT ==="; cat "$REPORT"
-
-      - name: Publish report
+      - name: Publish part 1
         if: always()
         shell: bash
         run: |
-          [ -f ci-smoke-report.md ] || echo "no report produced" > ci-smoke-report.md
+          [ -f ci-build-report.md ] || echo "no build report" > ci-build-report.md
           git config user.name  "arena-diagnostic[bot]"
           git config user.email "arena-diagnostic[bot]@users.noreply.github.com"
-          git fetch --depth 1 origin "$GITHUB_REF_NAME"
-          git checkout -B "$GITHUB_REF_NAME" "origin/$GITHUB_REF_NAME"
-          git add ci-smoke-report.md
-          git commit -m "ci: smoke diagnosis report" || echo "nothing to commit"
+          git add ci-build-report.md
+          git commit -m "ci: build report (unfixed)" || echo "nothing to commit"
+          git pull --rebase origin "$GITHUB_REF_NAME" || true
           git push origin "HEAD:$GITHUB_REF_NAME"
