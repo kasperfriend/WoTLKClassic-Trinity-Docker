@@ -60,7 +60,15 @@ services:
     # in a registry (see the header). SERVER_PULL_POLICY overrides this for a
     # registry-hosted SERVER_IMAGE: always = refresh from GHCR on every up,
     # missing = pull only when it isn't cached yet.
-    build: .
+    build: &tcbuild
+      context: .
+      # Everything the Dockerfile can be pointed at, without hand-running
+      # `docker build`: set these in .env if upstream ever moves.
+      args:
+        SOURCE_REPO: ${SOURCE_REPO:-https://github.com/xHashii/3.4.3_Source.git}
+        SOURCE_BRANCH: ${SOURCE_BRANCH:-main}
+        SOURCE_SHA: ${SOURCE_SHA:-}
+        UBUNTU_VERSION: ${UBUNTU_VERSION:-24.04}
     pull_policy: ${SERVER_PULL_POLICY:-never}
     command: ["bnetserver"]
     environment: &dbenv
@@ -70,6 +78,10 @@ services:
       MYSQL_PASSWORD: ${MYSQL_ROOT_PASSWORD:-wow}
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-wow}
       AUTO_DOWNLOAD_DB: ${AUTO_DOWNLOAD_DB:-true}
+      # Where the world/auth/characters dump comes from. Empty = the entrypoint
+      # default (the upstream `databases` release); override in .env if that
+      # release ever moves.
+      DB_URL: ${DB_URL:-}
       REALM_NAME: ${REALM_NAME:-TrinityCore 3.4.3}
       REALM_ADDRESS: ${REALM_ADDRESS:-127.0.0.1}
       TZ: ${TZ:-Europe/Kiev}
@@ -97,7 +109,7 @@ services:
 
   worldserver:
     image: ${SERVER_IMAGE:-trinitycore-3.4.3:local}
-    build: .
+    build: *tcbuild        # same image, same build args as bnetserver
     pull_policy: ${SERVER_PULL_POLICY:-never}
     command: ["worldserver"]
     environment: *dbenv
@@ -126,7 +138,7 @@ services:
   # --------------------------------------------------------------------------
   extractors:
     image: ${SERVER_IMAGE:-trinitycore-3.4.3:local}
-    build: .
+    build: *tcbuild
     pull_policy: ${SERVER_PULL_POLICY:-never}
     entrypoint: ["/usr/local/bin/export-tools.sh"]
     environment:

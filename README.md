@@ -39,10 +39,21 @@ Steps 2–5 happen once. After that, starting the server is just
 
 ## Requirements
 
-* Docker 24+ with BuildKit and the `docker compose` v2 plugin
+* Docker 24+ with BuildKit and the `docker compose` **v2** plugin
+  (`docker compose version` ≥ 2.17 — that is when `pull_policy` arrived; the
+  one in this repo is what keeps a first `up` from probing Docker Hub)
 * ~10 GB disk for the image, +25 GB while extracting a client
-* The WoW 3.4.3 (WotLK Classic) client if you want a playable world —
-  link is in the [upstream README](https://github.com/xHashii/3.4.3_Source#readme)
+* The WoW 3.4.3 (WotLK Classic) client if you want a playable world.
+  3.4.3 is not the current Classic tier any more, so plan on getting the
+  client from the link in the
+  [upstream README](https://github.com/xHashii/3.4.3_Source#readme) or from a
+  copy you already keep — Battle.net will not hand it to you on a reinstall.
+* Internet during the first run only: the Ubuntu base layers, the source
+  clone, and the world DB bundle are fetched from GitHub (`./doctor.sh`
+  checks all three are reachable *before* you wait 45 minutes for a build)
+
+Nothing else. A fresh clone + `docker compose up -d` is the whole setup —
+see [Quick start](#quick-start).
 
 ---
 
@@ -392,6 +403,8 @@ GitHub repo:
 | `SERVER_IMAGE` | `trinitycore-3.4.3:local` | image the compose stack runs (built from this repo unless you point it at GHCR) |
 | `SERVER_PULL_POLICY` | `never` | `never` = build the image locally, never ask a registry (this is what keeps `pull access denied for trinitycore-3.4.3` from happening). Set `always` for a registry-hosted `SERVER_IMAGE`, `missing` to pull only when it isn't cached |
 | `AUTO_DOWNLOAD_DB` | `true` | download the official DB bundle when `world` is empty |
+| `DB_URL` | upstream `databases` release | where that bundle is downloaded from (the entrypoint default, forwarded to the containers) |
+| `SOURCE_REPO` / `SOURCE_BRANCH` / `SOURCE_SHA` | `xHashii/3.4.3_Source` `main` | what the image is compiled from — set these if upstream ever moves |
 | `REALM_NAME` | `TrinityCore 3.4.3` | realm name in the client realm list |
 | `REALM_ADDRESS` | `127.0.0.1` | realm address clients connect to |
 | `TZ` | `Europe/Kiev` | container timezone |

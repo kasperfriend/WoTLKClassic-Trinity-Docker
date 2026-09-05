@@ -250,7 +250,55 @@ else
   info "skipped (no 'ss'); 'address already in use' in a container log means a port clash — remap it in docker-compose.yml"
 fi
 
+hdr "7. First-run downloads (needs internet)"
+# A fresh clone builds the image from SOURCE_REPO and then downloads the world
+# DB inside the container. If either URL is gone, you want to know before the
+# 25-45 minute compile, not after it.
+SRC_REPO_URL="$(env_value SOURCE_REPO)"
+[ -n "$SRC_REPO_URL" ] || SRC_REPO_URL="https://github.com/xHashii/3.4.3_Source.git"
+DB_BUNDLE_URL="$(env_value DB_URL)"
+[ -n "$DB_BUNDLE_URL" ] || DB_BUNDLE_URL="https://github.com/lineagedr/3.4.3_Source/releases/download/databases/Databases.7z"
+
+if ! command -v curl >/dev/null 2>&1; then
+  info "skipped (no curl): SOURCE_REPO=$SRC_REPO_URL"
+  info "                     DB_URL=$DB_BUNDLE_URL"
+else
+  probe() { # $1 = url → HTTP status, 000 when unreachable
+    curl -sIL --max-time 10 -o /dev/null -w '%{http_code}' "$1" 2>/dev/null || true
+  }
+  repo_page="$(printf '%s' "$SRC_REPO_URL" | sed -e 's/\.git$//' -e 's|^git@github.com:|https://github.com/|')"
+  case "$repo_page" in
+    http*)
+      code="$(probe "$repo_page")"
+      case "$code" in
+        200|301|302) ok "source to compile: $repo_page → $code" ;;
+        000|"")      warn "no internet (or GitHub unreachable) right now — a fresh 'docker compose build' would fail at the git clone" ;;
+        404)         fail "SOURCE_REPO is gone ($repo_page → 404) — the build would die with 'repository not found'"
+                     fix "point .env at a live fork: SOURCE_REPO=https://github.com/<you>/<fork>.git" ;;
+        *)           warn "SOURCE_REPO page returned HTTP $code ($repo_page)" ;;
+      esac ;;
+    *) info "SOURCE_REPO is not a GitHub web URL, skipping that probe ($SRC_REPO_URL)" ;;
+  esac
+
+  code="$(probe "$DB_BUNDLE_URL")"
+  case "$code" in
+    200|301|302|307) ok "world DB bundle: $DB_BUNDLE_URL → $code" ;;
+    000|"")          warn "cannot reach the DB bundle right now (no internet?) — worldserver would wait for ./import/world/*.sql" ;;
+    404)             fail "the DB bundle download is gone (HTTP 404) — you would get a built image and an empty world DB"
+                     fix "set DB_URL in .env to a live dump, or drop your own dumps into ./import/world/ and set AUTO_DOWNLOAD_DB=false" ;;
+    *)               warn "DB bundle returned HTTP $code — first boot may fall back to waiting for ./import/world/*.sql" ;;
+  esac
+
+  code="$(probe https://registry-1.docker.io/v2/)"
+  case "$code" in
+    200|401|403) ok "Docker Hub reachable (pulls mysql:8.0 + the 'ubuntu' build base)" ;;
+    *)           warn "Docker Hub did not answer (HTTP ${code:-none}) — normal if you use a registry mirror or an offline box; otherwise mysql:8.0 and the build base cannot be pulled" ;;
+  esac
+  info "        (both URLs are overridable in .env: SOURCE_REPO, DB_URL)"
+fi
+
 hdr "Summary"
+
 if [ "$FAILURES" -eq 0 ] && [ "$WARNINGS" -eq 0 ]; then
   if [ "$ENGINE_OK" -eq 1 ]; then
     ok "nothing to fix — start (or restart) the stack:  ${COMPOSE:-docker compose} up -d"
