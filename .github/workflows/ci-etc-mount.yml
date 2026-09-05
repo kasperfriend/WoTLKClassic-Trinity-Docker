@@ -82,8 +82,15 @@ jobs:
           mkdir -p import/world
           echo "CREATE TABLE IF NOT EXISTS arena_marker (id INT);" > import/world/zz_arena_marker.sql
           docker compose up -d --no-build mysql worldserver >> "$R" 2>&1
-          for _ in $(seq 1 36); do
-            [ -f etc/worldserver.conf ] && break
+          # wait until the seed is COMPLETE, not merely started: the file
+          # appears the moment it is copied, before the replaces run.
+          for _ in $(seq 1 40); do
+            grep -qE '^SourceDirectory *= *"/opt/tc"' etc/worldserver.conf 2>/dev/null && break
+            sleep 5
+          done
+          # and give worldserver itself a chance to come up
+          for _ in $(seq 1 24); do
+            docker logs wow343-worldserver-1 2>&1 | grep -q "Using configuration file" && break
             sleep 5
           done
           echo "--- host ./etc:" >> "$R"; ls -la etc >> "$R" 2>&1
