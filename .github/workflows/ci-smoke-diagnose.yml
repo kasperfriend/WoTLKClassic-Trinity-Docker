@@ -52,26 +52,21 @@ jobs:
           fi
           echo '```' >> "$R"
 
-          echo "" >> "$R"; echo "## 2. banner check (absolute cert paths + TC_LOGGER_ROOT)" >> "$R"
-          OUT="$(docker run --rm --network none \
-                  -e TC_LOGGER_ROOT=4,Console \
-                  -e TC_CERTIFICATES_FILE=/opt/tc/etc/bnetserver.cert.pem \
-                  -e TC_PRIVATE_KEY_FILE=/opt/tc/etc/bnetserver.key.pem \
-                  --entrypoint /opt/tc/bin/bnetserver "$IMAGE" \
-                  -c /opt/tc/etc/bnetserver.conf.dist 2>&1 | head -40)" || true
+          echo "" >> "$R"; echo "## 2. bnetserver --version (executes, loader OK)" >> "$R"
+          OUT="$(docker run --rm --network none --entrypoint /opt/tc/bin/bnetserver "$IMAGE" --version 2>&1)" || true
           echo '```' >> "$R"; echo "$OUT" | tr -d '\000' >> "$R"; echo '```' >> "$R"
           if echo "$OUT" | grep -qE "error while loading shared libraries|cannot open shared object file"; then
             echo "STEP2_FAIL (loader error)" >> "$R"
-          elif echo "$OUT" | grep -qF "<Ctrl-C> to stop."; then
+          elif echo "$OUT" | grep -q "rev\."; then
             echo "STEP2_PASS" >> "$R"
           else
-            echo "STEP2_FAIL (no banner)" >> "$R"
+            echo "STEP2_FAIL (no version string)" >> "$R"
           fi
 
           echo "" >> "$R"; echo "## 3. live stack: MySQL + bnetserver via docker-compose" >> "$R"
           echo '```' >> "$R"
           AUTO_DOWNLOAD_DB=false SERVER_IMAGE="$IMAGE" \
-            docker compose up -d --pull never mysql bnetserver >> "$R" 2>&1 \
+            docker compose up -d --no-build mysql bnetserver >> "$R" 2>&1 \
             && echo "COMPOSE_UP_OK" >> "$R" || echo "COMPOSE_UP_FAILED" >> "$R"
           H=missing
           for _ in $(seq 1 36); do
