@@ -24,6 +24,8 @@ Warcraft 3.4.3 (WotLK Classic) server (TrinityCore-based).
                                    extractors into this folder
 3. ./extract-data.sh <client>   →  extract dbc/maps/vmaps/mmaps/gt/cameras
                                    from your 3.4.3 client (1–4 h)
+                                   — or ./place-data.sh <path> if you
+                                   already have extracted data
 4. ./data/                      →  that's where the extracted folders belong
                                    (the launcher puts them there for you)
 5. docker compose restart       →  worldserver (or the whole stack) comes up
@@ -107,6 +109,8 @@ the meantime.
 WoTLKClassic-Trinity-Docker/
 ├── extract-data.sh     <- Linux / macOS: run this
 ├── extract-data.bat    <- Windows: drag your client folder onto it
+├── place-data.sh       <- already extracted? run this with the data folder
+├── place-data.bat      <- same, for Windows
 └── tools/              <- the raw extractor binaries
 ```
 
@@ -128,6 +132,22 @@ The launcher runs all four tools in the right order
 
 Expect **1–4 hours** (`mmaps_generator` is the slow part) and ~25 GB of free
 disk. Ctrl+C is safe — just re-run it.
+
+**Already have the data?** If you extracted earlier — on this machine, on
+another machine, or by hand with the raw tools — skip this step entirely and
+just place the finished folders:
+
+```bash
+./place-data.sh /path/to/extracted/folder            # copy (default)
+./place-data.sh /path/to/extracted/folder --move     # move (instant, frees source space)
+./place-data.sh /path/to/extracted/folder --dry-run  # show what it would do
+```
+
+It accepts a folder that directly contains `dbc/ maps/ vmaps/ mmaps/ gt/`,
+a client folder the extractors were already run in (output next to `Wow.exe`),
+or another checkout of this repo (its `./data` is found automatically). It
+replaces anything stale in `./data` and verifies the five required folders.
+On **Windows**, drag the folder onto `place-data.bat` instead (it copies).
 
 > **How the tools got there:** a one-shot `extractors` service copies them out
 > of the image on every `up -d` (and refreshes them when you rebuild). It exits
@@ -161,8 +181,10 @@ WoTLKClassic-Trinity-Docker/
 **All five "required" folders matter** — worldserver refuses to start without
 any one of them, and it names the missing ones in its log.
 
-If you extracted by hand (or on another machine), move those folders into
-`./data` yourself. They must sit **directly** in `./data` — a nested
+If you extracted by hand (or on another machine), `./place-data.sh
+/path/to/extracted` does this for you (see [step 3](#3-extract-the-client-data))
+— it places the folders into `./data` and verifies the five required ones.
+Moved by hand, they must sit **directly** in `./data` — a nested
 `./data/data/maps` or `./data/3.4.3/maps` will not be found. Anything already
 in `./data` from an earlier attempt can be replaced wholesale.
 
@@ -224,6 +246,8 @@ docker compose restart worldserver    # after editing ./etc/worldserver.conf
 WoTLKClassic-Trinity-Docker/
 ├── Dockerfile                        # multi-stage: clone upstream → compile → slim runtime
 ├── docker-compose.yml                # mysql + bnetserver + worldserver + extractors
+├── place-data.sh                     # put already-extracted data into ./data (Linux/macOS)
+├── place-data.bat                    # same, for Windows
 ├── .env.example                      # copy to .env and edit (optional)
 ├── .github/workflows/poll-and-build.yml # polls upstream, builds only on new commits
 ├── import/world/                     # drop your own *.sql dumps here
@@ -351,7 +375,7 @@ four on first `up`.
 
 | On your PC | In the container | What goes there |
 |---|---|---|
-| `./data` | `/opt/tc/data` | Client data: `dbc/`, `maps/`, `vmaps/`, `mmaps/`, `gt/`, `cameras/` (from `./extract-data.sh`) |
+| `./data` | `/opt/tc/data` | Client data: `dbc/`, `maps/`, `vmaps/`, `mmaps/`, `gt/`, `cameras/` (from `./extract-data.sh`, or `./place-data.sh` for data you already have) |
 | `./etc` | `/opt/tc/conf` | **`worldserver.conf` and `bnetserver.conf` — yours to edit** |
 | `./logs` | `/opt/tc/logs` | Server log files (`Worldserver.log`, `Bnet.log`, …) |
 | `./import/world` | `/opt/tc/import/world` | Your own `*.sql` dumps, imported on the next boot |
@@ -410,6 +434,7 @@ and the workflow builds that instead.
 |---|---|
 | worldserver logs `client data is missing or empty in ./data` | expected until step 3 is done — run `./extract-data.sh` (or `extract-data.bat`) with your 3.4.3 client, then `docker compose restart worldserver` (or just wait: it re-checks every 60 s) |
 | Data is extracted but worldserver still says it's missing | it isn't in the right place — the five required folders must sit directly in `./data` (`./data/maps`, not `./data/data/maps`); see [step 4](#4-the-data-goes-in-data) |
+| I already have extracted data, just need to put it in the stack | `./place-data.sh /path/to/extracted` (Windows: drag the folder onto `place-data.bat`) — places `dbc maps vmaps mmaps gt cameras` into `./data`, replaces stale ones, verifies the required folders, then `docker compose restart worldserver` |
 | worldserver logs `Waiting for import files` | world DB is empty — either let the DB bundle download (`AUTO_DOWNLOAD_DB=true`) or drop dumps into `./import/world/` |
 | `Some required *.txt GameTable files not found` | `./data/gt` is missing — re-run the extractor |
 | No `extract-data.sh` / `tools/` in the repo folder | the `extractors` service didn't run — `docker compose up -d extractors` and check `docker compose logs extractors` |
