@@ -1,6 +1,6 @@
 # TEMPORARY diagnostic workflow — identifies why the daily-rebuild smoke test
 # failed, and reports the findings back into the repo (this sandbox cannot read
-# Actions log archives, so the report is committed as a file + annotations).
+# Actions log archives, so the report is committed as a file).
 name: ci-smoke-diagnose
 
 on:
@@ -31,71 +31,83 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Diagnose image
+        continue-on-error: true
         shell: bash
         run: |
+          REPORT="$PWD/ci-smoke-report.md"
           IMAGE="ghcr.io/$(echo '${{ github.repository }}' | tr '[:upper:]' '[:lower:]'):latest"
-          REPORT=/tmp/report.md
           {
             echo "# smoke diagnosis"
             echo ""
-            echo "- image: \`$IMAGE\`"
+            echo "- image attempted: \`$IMAGE\`"
             echo "- generated: $(date -u +%FT%TZ)"
+            echo ""
           } > "$REPORT"
+          w() { echo "$@" | tee -a "$REPORT"; }
 
-          echo "=== pull ===" | tee -a "$REPORT"
-          if docker pull "$IMAGE" >> "$REPORT" 2>&1; then
-            echo "PULL_OK $IMAGE" | tee -a "$REPORT"
-          else
-            echo "PULL_FAILED $IMAGE" | tee -a "$REPORT"
-            cat "$REPORT"; exit 1
-          fi
+          w "## 1. pull"
+          docker pull "$IMAGE" >> "$REPORT" 2>&1 && w "PULL_OK" || w "PULL_FAILED"
 
-          echo "=== ldd of every binary ===" | tee -a "$REPORT"
-          docker run --rm --network none --entrypoint /bin/bash "$IMAGE" -c '
-            for b in /opt/tc/bin/*; do
-              echo "--- $b"
-              ldd "$b" 2>&1
+          if ! docker image inspect "$IMAGE" >/dev/null 2>&1; then
+            w ""
+            w "## 1b. fallback candidates"
+            for CAND in \
+              "ghcr.io/kasperfriend/wotlkclassic-trinity-docker:latest" \
+              "ghcr.io/kasperfriend/trinitycore-3.4.3:latest" ; do
+              w "- trying $CAND"
+              if docker pull "$CAND" >> "$REPORT" 2>&1; then
+                w "  PULL_OK -> using $CAND"
+                IMAGE="$CAND"; break
+              else
+                w "  PULL_FAILED"
+              fi
             done
-            echo "=== ldconfig mysql/mariadb ==="
-            ldconfig -p | grep -iE "mysql|mariadb" || echo "no mysql/mariadb sonames in image"
-            echo "=== dpkg mysql/mariadb packages ==="
-            dpkg -l | grep -iE "mysql|mariadb" || echo "none"
-          ' >> "$REPORT" 2>&1
-
-          echo "=== the exact CI link check ===" | tee -a "$REPORT"
-          if docker run --rm --network none --entrypoint /bin/bash "$IMAGE" -c '
-              set -e
-              for b in /opt/tc/bin/*; do
-                if ldd "$b" | grep -q "not found"; then
-                  echo "MISSING LIBS in $b:"; ldd "$b" | grep "not found"; exit 1
-                fi
-              done
-              echo "ALL_BINARIES_LINK_OK"'; then
-            echo "LINKCHECK_PASS" | tee -a "$REPORT"
-          else
-            echo "LINKCHECK_FAIL (exit $?)" | tee -a "$REPORT"
-            echo "::error::image link check failed - missing shared libraries"
           fi
 
-          echo "=== bnetserver banner check (exact CI check) ===" | tee -a "$REPORT"
-          OUT="$(docker run --rm --network none --entrypoint /opt/tc/bin/bnetserver "$IMAGE" \
-                 -c /opt/tc/etc/bnetserver.conf.dist 2>&1 | head -40)" || true
-          echo "$OUT" >> "$REPORT"
-          if echo "$OUT" | grep -qiE "bnetserver|TrinityCore"; then
-            echo "BANNER_PASS" | tee -a "$REPORT"
-          else
-            echo "BANNER_FAIL" | tee -a "$REPORT"
-            echo "::error::bnetserver printed no recognisable banner"
+          if docker image inspect "$IMAGE" >/dev/null 2>&1; then
+            w ""
+            w "## 2. ldd of every binary"
+            docker run --rm --network none --entrypoint /bin/bash "$IMAGE" -c '
+              for b in /opt/tc/bin/*; do echo "--- $b"; ldd "$b" 2>&1; done
+              echo "=== ldconfig mysql/mariadb sonames in image ==="
+              ldconfig -p | grep -iE "mysql|mariadb" || echo "(none)"
+              echo "=== installed mysql/mariadb packages ==="
+              dpkg -l | grep -iE "mysql|mariadb" || echo "(none)"
+            ' >> "$REPORT" 2>&1
+
+            w ""
+            w "## 3. exact CI link check"
+            if docker run --rm --network none --entrypoint /bin/bash "$IMAGE" -c '
+                set -e
+                for b in /opt/tc/bin/*; do
+                  if ldd "$b" | grep -q "not found"; then
+                    echo "MISSING LIBS in $b:"; ldd "$b" | grep "not found"; exit 1
+                  fi
+                done
+                echo "ALL_BINARIES_LINK_OK"'; then
+              w "LINKCHECK_PASS"
+            else
+              w "LINKCHECK_FAIL"
+            fi
+
+            w ""
+            w "## 4. exact CI bnetserver banner check"
+            OUT="$(docker run --rm --network none --entrypoint /opt/tc/bin/bnetserver "$IMAGE" \
+                   -c /opt/tc/etc/bnetserver.conf.dist 2>&1 | head -40)" || true
+            echo '```' >> "$REPORT"; echo "$OUT" >> "$REPORT"; echo '```' >> "$REPORT"
+            echo "$OUT" | grep -qiE "bnetserver|TrinityCore" && w "BANNER_PASS" || w "BANNER_FAIL"
+
+            w ""
+            w "## 5. image layout"
+            docker run --rm --network none --entrypoint /bin/bash "$IMAGE" -c '
+              ls -l /opt/tc /opt/tc/bin /opt/tc/etc
+              echo "--- sql tree"; ls /opt/tc/sql; ls /opt/tc/sql/base
+              echo "--- entrypoints"; ls -l /usr/local/bin/entrypoint.sh /usr/local/bin/healthcheck.sh
+            ' >> "$REPORT" 2>&1
           fi
 
-          echo "=== image layout ===" | tee -a "$REPORT"
-          docker run --rm --network none --entrypoint /bin/bash "$IMAGE" -c '
-            ls -l /opt/tc /opt/tc/bin /opt/tc/etc
-            echo "--- sql tree"; ls /opt/tc/sql; ls /opt/tc/sql/base
-            echo "--- entrypoint"; ls -l /usr/local/bin/entrypoint.sh /usr/local/bin/healthcheck.sh
-          ' >> "$REPORT" 2>&1
-
-          echo "=== candidate fix: is libmysqlclient21 in ubuntu:24.04? ===" | tee -a "$REPORT"
+          w ""
+          w "## 6. candidate fix: libmysqlclient21 in ubuntu:24.04"
           docker run --rm ubuntu:24.04 bash -c '
             apt-get update -qq >/dev/null 2>&1
             apt-get install -y --no-install-recommends libmysqlclient21 >/dev/null 2>&1 \
@@ -103,14 +115,17 @@ jobs:
               || echo "libmysqlclient21 INSTALL_FAILED"
           ' >> "$REPORT" 2>&1
 
-          cp "$REPORT" ./ci-smoke-report.md
           echo "=== REPORT ==="; cat "$REPORT"
 
       - name: Publish report
+        if: always()
         shell: bash
         run: |
+          [ -f ci-smoke-report.md ] || echo "no report produced" > ci-smoke-report.md
           git config user.name  "arena-diagnostic[bot]"
           git config user.email "arena-diagnostic[bot]@users.noreply.github.com"
+          git fetch --depth 1 origin "$GITHUB_REF_NAME"
+          git checkout -B "$GITHUB_REF_NAME" "origin/$GITHUB_REF_NAME"
           git add ci-smoke-report.md
           git commit -m "ci: smoke diagnosis report" || echo "nothing to commit"
-          git push origin HEAD:"${GITHUB_REF_NAME}"
+          git push origin "HEAD:$GITHUB_REF_NAME"
