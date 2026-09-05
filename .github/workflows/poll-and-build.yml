@@ -153,7 +153,10 @@ jobs:
           # databases, imports the base auth/characters schemas, renders
           # bnetserver.conf and starts the server. "healthy" means
           # healthcheck.sh found the process AND port 1119 listening.
-          AUTO_DOWNLOAD_DB=false SERVER_IMAGE="$IMAGE" docker compose up -d --no-build mysql bnetserver
+          # SERVER_PULL_POLICY=always is required here: the compose default is
+          # 'never' so a local build never touches a registry, which would make
+          # this step refuse to use the just-pushed GHCR image.
+          AUTO_DOWNLOAD_DB=false SERVER_IMAGE="$IMAGE" SERVER_PULL_POLICY=always docker compose up -d --no-build mysql bnetserver
           H=missing
           for _ in $(seq 1 36); do
             H="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' wow343-bnetserver-1 2>/dev/null || echo missing)"

@@ -15,6 +15,16 @@
 #
 #  Afterwards: docker compose up -d starts everything in seconds.
 #  Watch the first boot with: docker compose logs -f worldserver
+#
+#  The server image is LOCAL-ONLY by default (trinitycore-3.4.3:local) — it
+#  exists nowhere on a registry, it only exists once this repo has built it.
+#  That is why the three services below set `pull_policy: never`: without it
+#  Compose asks Docker Hub for that name first and you get
+#      pull access denied for trinitycore-3.4.3, repository does not exist
+#      or may require 'docker login'
+#  (fatal on Compose older than ~v2.24, merely scary on newer ones). Nothing to
+#  do about it normally; if you ever wonder whether this folder is ready, run
+#  ./doctor.sh — it checks the image, the data, the launchers and the ports.
 # ============================================================================
 name: wow343
 
@@ -40,13 +50,18 @@ services:
   bnetserver:
     # Default: a LOCAL image name, so `docker compose up` always builds from
     # this repo and never depends on a registry you may not have access to.
-    # To pull the CI build instead, set SERVER_IMAGE in .env to the GHCR name
-    # the workflow actually publishes — ghcr.io/<owner>/<repo-in-lowercase>:
+    # To pull the CI build instead, set BOTH lines in .env (the workflow
+    # publishes ghcr.io/<owner>/<repo-in-lowercase>):
     #   SERVER_IMAGE=ghcr.io/kasperfriend/wotlkclassic-trinity-docker:latest
+    #   SERVER_PULL_POLICY=always
     # (that package must be Public, or the host must `docker login ghcr.io`)
     image: ${SERVER_IMAGE:-trinitycore-3.4.3:local}
-    # Built from this repo when the image is missing locally
+    # Built from this repo when the image is missing locally; never looked up
+    # in a registry (see the header). SERVER_PULL_POLICY overrides this for a
+    # registry-hosted SERVER_IMAGE: always = refresh from GHCR on every up,
+    # missing = pull only when it isn't cached yet.
     build: .
+    pull_policy: ${SERVER_PULL_POLICY:-never}
     command: ["bnetserver"]
     environment: &dbenv
       MYSQL_HOST: mysql
@@ -83,6 +98,7 @@ services:
   worldserver:
     image: ${SERVER_IMAGE:-trinitycore-3.4.3:local}
     build: .
+    pull_policy: ${SERVER_PULL_POLICY:-never}
     command: ["worldserver"]
     environment: *dbenv
     ports:
@@ -111,6 +127,7 @@ services:
   extractors:
     image: ${SERVER_IMAGE:-trinitycore-3.4.3:local}
     build: .
+    pull_policy: ${SERVER_PULL_POLICY:-never}
     entrypoint: ["/usr/local/bin/export-tools.sh"]
     environment:
       EXPORT_DIR: /export
