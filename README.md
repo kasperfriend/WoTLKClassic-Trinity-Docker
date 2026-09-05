@@ -146,8 +146,21 @@ just place the finished folders:
 It accepts a folder that directly contains `dbc/ maps/ vmaps/ mmaps/ gt/`,
 a client folder the extractors were already run in (output next to `Wow.exe`),
 or another checkout of this repo (its `./data` is found automatically). It
-replaces anything stale in `./data` and verifies the five required folders.
-On **Windows**, drag the folder onto `place-data.bat` instead (it copies).
+replaces anything stale in `./data` and verifies the five required folders —
+if one is missing or empty it stops and names it, rather than leaving you a
+server that can't start. On **Windows**, drag the folder onto `place-data.bat`
+instead (it copies).
+
+**The order is flexible** — the stack from step 2 can already be running;
+worldserver re-checks `./data` every 60 s and starts on its own once the data
+appears. To make it immediate:
+
+```bash
+./place-data.sh /path/to/extracted/folder && docker compose restart worldserver
+```
+
+(If the stack isn't up yet, just `docker compose up -d` after the script
+finishes instead.)
 
 > **How the tools got there:** a one-shot `extractors` service copies them out
 > of the image on every `up -d` (and refreshes them when you rebuild). It exits
