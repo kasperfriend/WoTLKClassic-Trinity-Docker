@@ -4,10 +4,17 @@
 #    bnetserver  : logon server        -> ports 1119 (bnet) + 8081 (REST)
 #    worldserver : game server         -> port 8085
 #
-#  Start:            docker compose up -d
-#  First boot:       downloads the TDB 3.4.3 world DB and imports it
-#                    (10–30 min — watch `docker compose logs -f worldserver`)
-#  Client data:      run ./extract-data.sh (or .bat), data lands in ./data
+#  Workflow (once):
+#    1. docker compose up -d          builds, starts, creates + imports the
+#                                     DBs (10–30 min), and drops the
+#                                     extractors into the repo root
+#    2. ./extract-data.sh <client>    extract client data (Windows: .bat)
+#    3. ./data                        where the extracted folders land
+#                                     (dbc maps vmaps mmaps gt cameras)
+#    4. docker compose restart worldserver     (or: docker compose restart)
+#
+#  Afterwards: docker compose up -d starts everything in seconds.
+#  Watch the first boot with: docker compose logs -f worldserver
 # ============================================================================
 name: wow343
 

@@ -15,26 +15,30 @@ Warcraft 3.4.3 (WotLK Classic) server (TrinityCore-based).
 
 ---
 
-## Repository layout
+## The whole workflow
 
 ```
-WoTLKClassic-Trinity-Docker/
-├── Dockerfile                        # multi-stage: clone upstream → compile → slim runtime
-├── docker-compose.yml                # mysql + bnetserver + worldserver stack
-├── .env.example                      # copy to .env and edit
-├── .github/workflows/poll-and-build.yml # polls upstream, builds only on new commits
-└── runtime/
-    ├── entrypoint.sh                 # DB wait → create DBs → import → render conf → start
-    ├── export-tools.sh               # copies extractors + launchers to the repo root
-    └── healthcheck.sh                # container health (process + port)
-
-  (generated on `up -d`, git-ignored: ./tools, extract-data.sh, extract-data.bat)
+1. git clone                    →  get this repo
+2. docker compose up -d         →  ONE command: builds, starts, creates the
+                                   DBs, downloads the world DB, drops the
+                                   extractors into this folder
+3. ./extract-data.sh <client>   →  extract dbc/maps/vmaps/mmaps/gt/cameras
+                                   from your 3.4.3 client (1–4 h)
+4. ./data/                      →  that's where the extracted folders belong
+                                   (the launcher puts them there for you)
+5. docker compose restart       →  worldserver (or the whole stack) comes up
+                                   with the data, and you're playing
 ```
+
+Steps 2–5 happen once. After that, starting the server is just
+`docker compose up -d` and it takes seconds.
+
+---
 
 ## Requirements
 
 * Docker 24+ with BuildKit and the `docker compose` v2 plugin
-* ~10 GB disk for the image, +15–25 GB if you extract a client
+* ~10 GB disk for the image, +25 GB while extracting a client
 * The WoW 3.4.3 (WotLK Classic) client if you want a playable world —
   link is in the [upstream README](https://github.com/xHashii/3.4.3_Source#readme)
 
@@ -42,65 +46,62 @@ WoTLKClassic-Trinity-Docker/
 
 ## Quick start
 
-### 1. Get the image
-
-Either **build it locally right now** (the default — nothing else to do):
+### 1. Clone
 
 ```bash
-docker build -t trinitycore-3.4.3:local .
+git clone https://github.com/kasperfriend/WoTLKClassic-Trinity-Docker.git
+cd WoTLKClassic-Trinity-Docker
 ```
 
-…or **pull the CI-built image** from your GHCR once the workflow has run
-(see [Auto-rebuild](#auto-rebuild-poll-upstream-every-15-minutes) — the package
-has to be made **public** first, or the host pulling it must
-`docker login ghcr.io`):
+That's the whole setup — everything below runs from this folder, and every
+file you will ever need to touch shows up right here.
 
-```bash
-docker pull ghcr.io/<your-github-username>/<your-repo>:latest
-```
+> **Optional, before step 2:** `cp .env.example .env` and edit it to change the
+> MySQL password, the realm name/address, or to run the CI-built GHCR image
+> instead of building locally. The defaults work as-is, so you can skip this
+> and come back to it later (see [Configuration](#configuration-reference)).
 
-> Build takes ~25–45 min on a typical 4-core machine. `SERVERS=ON`,
-> `TOOLS=ON`, Release.
-
-### 2. Configure
-
-```bash
-cp .env.example .env
-# edit MYSQL_ROOT_PASSWORD (and SERVER_IMAGE only if you use the GHCR image)
-```
-
-`SERVER_IMAGE` defaults to `trinitycore-3.4.3:local`, so `docker compose up`
-builds from this repo and needs no registry access.
-
-### 3. Start the stack
+### 2. Run `docker compose up -d` — once
 
 ```bash
 docker compose up -d
-docker compose logs -f worldserver    # watch first boot
+docker compose logs -f worldserver     # watch the first boot
 ```
 
-**First boot does everything for you:**
+This one command does everything up to the point where the server needs your
+client data:
 
-1. Waits for MySQL, creates `auth`, `characters`, `world`, `hotfixes`
-   databases (utf8mb4).
-2. Imports the base schemas shipped in the source
-   (`sql/base/auth_database.sql`, `characters_database.sql`,
-   `hotfixes_database.sql`).
-3. The source repo **does not ship a world database**, so the entrypoint
-   downloads the **official database bundle** for this source
-   (`Databases.7z`, ~48 MB, published by the upstream author) and imports
-   the full `world`, `hotfixes`, `auth` and `characters` dumps
-   (10–20 min import, one time only). Afterwards the core's built-in
-   auto-updater applies `sql/updates/*` on every start.
-4. Registers/updates the realm in `auth.realmlist` and starts both servers.
+1. **Builds the image** from the upstream source (~25–45 min on a typical
+   4-core machine; `SERVERS=ON`, `TOOLS=ON`, Release). Later runs reuse it.
+2. **Starts the stack** — MySQL 8 + `bnetserver` + `worldserver`.
+3. **Creates the databases** `auth`, `characters`, `world`, `hotfixes`
+   (utf8mb4) and imports the base schemas shipped in the source.
+4. **Fetches the world database.** The source repo doesn't ship one, so the
+   entrypoint downloads the **official database bundle** for this source
+   (`Databases.7z`, ~48 MB, published by the upstream author) and imports the
+   full `world`, `hotfixes`, `auth` and `characters` dumps — 10–20 min, one
+   time only. Afterwards the core's built-in auto-updater applies
+   `sql/updates/*` on every start.
+5. **Registers the realm** in `auth.realmlist` and starts both servers.
+6. **Drops the extractors into this folder** — `extract-data.sh`,
+   `extract-data.bat` and `tools/` — so step 3 needs no further Docker work.
+7. **Seeds `./etc/worldserver.conf` and `./etc/bnetserver.conf`**, which are
+   then yours to edit.
 
-Later boots take seconds.
+Then worldserver prints *"client data is missing or empty in ./data"* and
+**waits, re-checking every 60 s.** That's expected: leave the stack running
+and go to step 3. `bnetserver` is already up, so you can create accounts in
+the meantime.
 
-### 4. Extract client data (dbc / maps / vmaps / mmaps / gt / cameras)
+> **Prefer the CI-built image over compiling?** Put your GHCR path into
+> `SERVER_IMAGE` in `.env` before this step — see
+> [Auto-rebuild](#auto-rebuild-poll-upstream-every-15-minutes). You can also
+> pre-build by hand with `docker build -t trinitycore-3.4.3:local .`, but
+> `up -d` already does it for you.
 
-The world DB alone isn't enough — worldserver also needs data extracted
-**from the 3.4.3 client**. You already have everything you need: `docker
-compose up -d` dropped the extractors into this folder for you.
+### 3. Extract the client data
+
+`up -d` just put the extractors next to this README:
 
 ```
 WoTLKClassic-Trinity-Docker/
@@ -109,32 +110,26 @@ WoTLKClassic-Trinity-Docker/
 └── tools/              <- the raw extractor binaries
 ```
 
-**Linux / macOS:**
+**Linux / macOS** — pass the client folder (the one with `Wow.exe`):
 
 ```bash
 ./extract-data.sh /path/to/3.4.3/client
 ```
 
-**Windows:** drag your WoW 3.4.3 folder (the one with `Wow.exe`) onto
-`extract-data.bat`, or run it from a terminal:
+**Windows** — drag your WoW 3.4.3 folder onto `extract-data.bat`, or run it
+from a terminal:
 
 ```bat
 extract-data.bat "C:\Games\WoW 3.4.3"
 ```
 
-That's it — the launcher runs all four tools in the right order and moves
-`dbc/`, `maps/`, `vmaps/`, `mmaps/`, `gt/` and `cameras/` into `./data/` for
-you. Nothing to copy by hand.
+The launcher runs all four tools in the right order
+(`mapextractor` → `vmap4extractor` → `vmap4assembler` → `mmaps_generator`).
 
 Expect **1–4 hours** (`mmaps_generator` is the slow part) and ~25 GB of free
-disk. **All the folders matter** — worldserver refuses to start without
-`dbc/`, `maps/`, `vmaps/`, `mmaps/` *and* `gt/`, and the launcher stops with
-an error rather than leaving you a half-extracted `./data`. Until the data is
-there the worldserver container prints what's missing and waits, re-checking
-every 60 s, so you can extract while the stack is already up — no restart
-needed.
+disk. Ctrl+C is safe — just re-run it.
 
-> **How the tools get there:** a one-shot `extractors` service copies them out
+> **How the tools got there:** a one-shot `extractors` service copies them out
 > of the image on every `up -d` (and refreshes them when you rebuild). It exits
 > immediately and never touches the running servers. `./tools`,
 > `extract-data.sh` and `extract-data.bat` are generated, so they're
@@ -146,25 +141,54 @@ needed.
 > launcher runs them inside the image you already built — Docker just needs to
 > be running.
 
-#### Running the tools by hand
+### 4. The data goes in `./data`
 
-The order and arguments matter:
+**The launcher already did this for you** — it moves the extractor output into
+`./data/` when it finishes, and errors out rather than leaving you a
+half-extracted folder. This is just what the result has to look like:
 
 ```
-mapextractor
-vmap4extractor
-vmap4assembler Buildings vmaps
-mmaps_generator
+WoTLKClassic-Trinity-Docker/
+└── data/            <- bind-mounted into the containers as /opt/tc/data
+    ├── dbc/         <- required
+    ├── maps/        <- required
+    ├── vmaps/       <- required
+    ├── mmaps/       <- required
+    ├── gt/          <- required
+    └── cameras/
 ```
 
-On Linux use `./tools/run-tool.sh <tool> [args]` so the bundled libraries are
-picked up. Note that `vmap4assembler .` does **not** work — `vmap4extractor`
-writes its raw output into `Buildings/`, and the assembler has to be pointed
-at it. Getting this wrong yields an empty `vmaps/` and the server then dies
-with *"Unable to load map and vmap data for starting zones"*. The `Buildings/`
-intermediate is ~10 GB and is deleted for you when extraction finishes.
+**All five "required" folders matter** — worldserver refuses to start without
+any one of them, and it names the missing ones in its log.
 
-### 5. Create an account & log in
+If you extracted by hand (or on another machine), move those folders into
+`./data` yourself. They must sit **directly** in `./data` — a nested
+`./data/data/maps` or `./data/3.4.3/maps` will not be found. Anything already
+in `./data` from an earlier attempt can be replaced wholesale.
+
+### 5. Restart worldserver — or everything
+
+```bash
+docker compose restart worldserver     # just the game server
+```
+
+…or restart the whole stack if you prefer:
+
+```bash
+docker compose restart                 # mysql + bnetserver + worldserver
+```
+
+Watch it come up:
+
+```bash
+docker compose logs -f worldserver
+```
+
+> If you left the stack running through step 3, worldserver notices the data
+> on its own within 60 s — the restart just makes it immediate. Use one after
+> editing `./etc/*.conf` too.
+
+### 6. Create an account & log in
 
 Accounts are created on the **worldserver** console (`bnetserver` has no
 console). A Battle.net account name must be an e-mail-style name containing
@@ -182,6 +206,65 @@ That also creates the game account `myuser@local#1` for you.
   (the client talks to the logon server on port 1119) and log in with
   `myuser@local` / `mypass`.
 * For friends on your LAN set `REALM_ADDRESS` in `.env` to your LAN IP.
+
+### Day-to-day afterwards
+
+```bash
+docker compose up -d          # start (seconds — no re-import, no re-extract)
+docker compose stop           # stop, keep everything
+docker compose logs -f worldserver
+docker compose restart worldserver    # after editing ./etc/worldserver.conf
+```
+
+---
+
+## Repository layout
+
+```
+WoTLKClassic-Trinity-Docker/
+├── Dockerfile                        # multi-stage: clone upstream → compile → slim runtime
+├── docker-compose.yml                # mysql + bnetserver + worldserver + extractors
+├── .env.example                      # copy to .env and edit (optional)
+├── .github/workflows/poll-and-build.yml # polls upstream, builds only on new commits
+├── import/world/                     # drop your own *.sql dumps here
+└── runtime/
+    ├── entrypoint.sh                 # DB wait → create DBs → import → render conf → start
+    ├── export-tools.sh               # copies extractors + launchers to the repo root
+    └── healthcheck.sh                # container health (process + port)
+
+created by `docker compose up -d` (all git-ignored):
+├── tools/            extractor binaries + bundled libs
+├── extract-data.sh   Linux/macOS launcher
+├── extract-data.bat  Windows launcher
+├── data/             extracted client data — see step 4
+├── etc/              worldserver.conf / bnetserver.conf — yours to edit
+└── logs/             server logs
+```
+
+---
+
+## Running the extractor tools by hand
+
+Only needed if you don't want the launcher. The order and arguments matter:
+
+```
+mapextractor
+vmap4extractor
+vmap4assembler Buildings vmaps
+mmaps_generator
+```
+
+Run them with the client folder as the working directory — the tools read and
+write the current directory — then move `dbc/`, `maps/`, `vmaps/`, `mmaps/`,
+`gt/` and `cameras/` into `./data` as shown in [step 4](#4-the-data-goes-in-data).
+
+On Linux use `./tools/run-tool.sh <tool> [args]` so the bundled libraries are
+picked up. Note that `vmap4assembler .` does **not** work — `vmap4extractor`
+writes its raw output into `Buildings/`, and the assembler has to be pointed
+at it. Getting this wrong yields an empty `vmaps/` and the server then dies
+with *"Unable to load map and vmap data for starting zones"*. The `Buildings/`
+intermediate is ~10 GB and can be deleted once `mmaps_generator` is done (the
+launcher does that for you).
 
 ---
 
@@ -224,8 +307,8 @@ GitHub repo:
    Public*. (Or keep it private and `docker login ghcr.io` on every host that
    pulls it.)
 5. Put `ghcr.io/<your-user>/<your-repo>:latest` into `SERVER_IMAGE` in
-   your `.env` and `docker compose up -d` uses the CI-built image instead of
-   building locally.
+   your `.env` — then `docker compose up -d` pulls the CI-built image instead
+   of compiling, and step 2 above takes minutes instead of an hour.
 
 > **The image name follows the repository name:** it is
 > `ghcr.io/<owner>/<repo-in-lowercase>:latest`. Renaming the repo afterwards
@@ -246,6 +329,9 @@ GitHub repo:
 | `REALM_NAME` | `TrinityCore 3.4.3` | realm name in the client realm list |
 | `REALM_ADDRESS` | `127.0.0.1` | realm address clients connect to |
 | `TZ` | `Europe/Kiev` | container timezone |
+
+Everything has a working default, which is why step 2 runs without an `.env`
+at all. `cp .env.example .env`, edit, then `docker compose up -d` to apply.
 
 **Bring your own databases:** drop one or more dumps into `import/world/`
 (`/opt/tc/import/world` in the container) — they are imported on next boot
@@ -322,11 +408,12 @@ and the workflow builds that instead.
 
 | Symptom | Fix |
 |---|---|
+| worldserver logs `client data is missing or empty in ./data` | expected until step 3 is done — run `./extract-data.sh` (or `extract-data.bat`) with your 3.4.3 client, then `docker compose restart worldserver` (or just wait: it re-checks every 60 s) |
+| Data is extracted but worldserver still says it's missing | it isn't in the right place — the five required folders must sit directly in `./data` (`./data/maps`, not `./data/data/maps`); see [step 4](#4-the-data-goes-in-data) |
 | worldserver logs `Waiting for import files` | world DB is empty — either let the DB bundle download (`AUTO_DOWNLOAD_DB=true`) or drop dumps into `./import/world/` |
-| worldserver logs `client data is missing or empty in ./data` | run `./extract-data.sh` (or `extract-data.bat`) with your 3.4.3 client; the container picks the data up on its own within 60 s |
 | `Some required *.txt GameTable files not found` | `./data/gt` is missing — re-run the extractor |
 | No `extract-data.sh` / `tools/` in the repo folder | the `extractors` service didn't run — `docker compose up -d extractors` and check `docker compose logs extractors` |
-| `Unable to load map and vmap data for starting zones` | `./data/maps` or `./data/vmaps` is incomplete — re-run the extractor |
+| `Unable to load map and vmap data for starting zones` | `./data/maps` or `./data/vmaps` is incomplete — re-run the extractor (a bare `vmap4assembler .` produces empty vmaps) |
 | First worldserver boot takes very long | normal — full world DB import, one time (10–30 min) |
 | DB connection errors | MySQL still starting (healthcheck gates startup) or wrong `MYSQL_ROOT_PASSWORD` after first boot — delete the `mysql-data` volume to reset |
 | GHCR pull denied / `manifest unknown` / `NAME_UNKNOWN` | the package is private (GHCR's default) → make it public, or `docker login ghcr.io` first |
