@@ -1,4 +1,4 @@
-# ./etc config-mount report (2026-09-05T11:14:42Z)
+# ./etc config-mount report (2026-09-05T11:47:55Z)
 
 ## 1. bnetserver: conf seeded on first up
 ```
@@ -15,6 +15,7 @@ ls: cannot access 'etc': No such file or directory
  7534d1db9f8d Pulling fs layer 
  49ec2dab01d9 Pulling fs layer 
  ab24264a27e9 Pulling fs layer 
+ 0d74d296605b Waiting 
  96d30d9fbee8 Pulling fs layer 
  297d04cfe470 Waiting 
  4c8a3e0d4e4b Waiting 
@@ -23,58 +24,57 @@ ls: cannot access 'etc': No such file or directory
  49ec2dab01d9 Waiting 
  ab24264a27e9 Waiting 
  96d30d9fbee8 Waiting 
- 0d74d296605b Waiting 
- e3e5d1ac74c1 Downloading [=>                                                 ]  15.74kB/783.6kB
  6ef6c7b50a93 Downloading [==================================================>]     884B/884B
  6ef6c7b50a93 Verifying Checksum 
  6ef6c7b50a93 Download complete 
+ e3e5d1ac74c1 Downloading [=>                                                 ]  15.74kB/783.6kB
+ edf85873f64e Downloading [>                                                  ]  474.5kB/47.31MB
  e3e5d1ac74c1 Downloading [==================================================>]  783.6kB/783.6kB
  e3e5d1ac74c1 Verifying Checksum 
  e3e5d1ac74c1 Download complete 
- edf85873f64e Downloading [>                                                  ]  474.5kB/47.31MB
- 0d74d296605b Downloading [>                                                  ]  64.89kB/6.173MB
- edf85873f64e Downloading [======>                                            ]  6.176MB/47.31MB
+ 0d74d296605b Downloading [>                                                  ]  64.87kB/6.173MB
  297d04cfe470 Downloading [==================================================>]  2.607kB/2.607kB
  297d04cfe470 Verifying Checksum 
  297d04cfe470 Download complete 
- 0d74d296605b Downloading [==============================>                    ]    3.8MB/6.173MB
- edf85873f64e Downloading [============================================>      ]  41.81MB/47.31MB
  0d74d296605b Verifying Checksum 
  0d74d296605b Download complete 
- edf85873f64e Verifying Checksum 
- edf85873f64e Download complete 
- edf85873f64e Extracting [>                                                  ]  491.5kB/47.31MB
+ edf85873f64e Downloading [=========================>                         ]  24.23MB/47.31MB
  4c8a3e0d4e4b Downloading [==================================================>]     335B/335B
  4c8a3e0d4e4b Verifying Checksum 
  4c8a3e0d4e4b Download complete 
- edf85873f64e Extracting [=====>                                             ]  4.915MB/47.31MB
+ a63160a5eda1 Downloading [>                                                  ]  507.2kB/49.93MB
  7534d1db9f8d Downloading [==================================================>]     316B/316B
  7534d1db9f8d Verifying Checksum 
  7534d1db9f8d Download complete 
- a63160a5eda1 Downloading [>                                                  ]  507.3kB/49.93MB
- edf85873f64e Extracting [========>                                          ]  7.864MB/47.31MB
- a63160a5eda1 Downloading [===================>                               ]  19.81MB/49.93MB
- 49ec2dab01d9 Downloading [>                                                  ]  534.2kB/129.4MB
- ab24264a27e9 Downloading [================================>                  ]    3.5kB/5.327kB
+ edf85873f64e Verifying Checksum 
+ edf85873f64e Download complete 
+ edf85873f64e Extracting [>                                                  ]  491.5kB/47.31MB
+ ab24264a27e9 Downloading [================================>                  ]  3.478kB/5.327kB
  ab24264a27e9 Downloading [==================================================>]  5.327kB/5.327kB
  ab24264a27e9 Verifying Checksum 
  ab24264a27e9 Download complete 
- edf85873f64e Extracting [================>                                  ]  15.24MB/47.31MB
- a63160a5eda1 Verifying Checksum 
- a63160a5eda1 Download complete 
- 49ec2dab01d9 Downloading [=========>                                         ]  23.45MB/129.4MB
- edf85873f64e Extracting [=======================>                           ]  22.61MB/47.31MB
+ 49ec2dab01d9 Downloading [>                                                  ]  525.5kB/129.4MB
+ a63160a5eda1 Downloading [==========================>                        ]  26.41MB/49.93MB
  96d30d9fbee8 Downloading [==================================================>]     120B/120B
  96d30d9fbee8 Verifying Checksum 
  96d30d9fbee8 Download complete 
- 49ec2dab01d9 Downloading [======================>                            ]  57.54MB/129.4MB
- edf85873f64e Extracting [===============================>                   ]  29.98MB/47.31MB
- 49ec2dab01d9 Downloading [=================================>                 ]  86.95MB/129.4MB
- edf85873f64e Extracting [===================================>               ]  33.42MB/47.31MB
- 49ec2dab01d9 Downloading [=================================================> ]  129.2MB/129.4MB
+ edf85873f64e Extracting [=>                                                 ]  1.475MB/47.31MB
+ a63160a5eda1 Verifying Checksum 
+ a63160a5eda1 Download complete 
+ 49ec2dab01d9 Downloading [==>                                                ]  5.795MB/129.4MB
+ edf85873f64e Extracting [======>                                            ]   6.39MB/47.31MB
+ 49ec2dab01d9 Downloading [======>                                            ]  17.44MB/129.4MB
+ edf85873f64e Extracting [=======>                                           ]  7.373MB/47.31MB
+ 49ec2dab01d9 Downloading [===================>                               ]   50.5MB/129.4MB
+ edf85873f64e Extracting [=============>                                     ]  12.78MB/47.31MB
+ 49ec2dab01d9 Downloading [===============================>                   ]  81.98MB/129.4MB
+ edf85873f64e Extracting [====================>                              ]  19.17MB/47.31MB
+ 49ec2dab01d9 Downloading [===========================================>       ]  113.5MB/129.4MB
  49ec2dab01d9 Verifying Checksum 
  49ec2dab01d9 Download complete 
- edf85873f64e Extracting [=============================================>     ]  42.76MB/47.31MB
+ edf85873f64e Extracting [===========================>                       ]  26.05MB/47.31MB
+ edf85873f64e Extracting [=================================>                 ]  31.95MB/47.31MB
+ edf85873f64e Extracting [===========================================>       ]  41.29MB/47.31MB
  edf85873f64e Extracting [==============================================>    ]  44.24MB/47.31MB
  edf85873f64e Extracting [==================================================>]  47.31MB/47.31MB
  edf85873f64e Pull complete 
@@ -86,8 +86,7 @@ ls: cannot access 'etc': No such file or directory
  e3e5d1ac74c1 Extracting [==================================================>]  783.6kB/783.6kB
  e3e5d1ac74c1 Pull complete 
  0d74d296605b Extracting [>                                                  ]  65.54kB/6.173MB
- 0d74d296605b Extracting [==>                                                ]  262.1kB/6.173MB
- 0d74d296605b Extracting [=========================>                         ]  3.146MB/6.173MB
+ 0d74d296605b Extracting [====================>                              ]   2.49MB/6.173MB
  0d74d296605b Extracting [==================================================>]  6.173MB/6.173MB
  0d74d296605b Pull complete 
  297d04cfe470 Extracting [==================================================>]  2.607kB/2.607kB
@@ -97,51 +96,61 @@ ls: cannot access 'etc': No such file or directory
  4c8a3e0d4e4b Extracting [==================================================>]     335B/335B
  4c8a3e0d4e4b Pull complete 
  a63160a5eda1 Extracting [>                                                  ]  524.3kB/49.93MB
- a63160a5eda1 Extracting [=========>                                         ]  9.437MB/49.93MB
+ a63160a5eda1 Extracting [========>                                          ]  8.389MB/49.93MB
  a63160a5eda1 Extracting [==============>                                    ]  14.68MB/49.93MB
- a63160a5eda1 Extracting [=======================>                           ]  23.07MB/49.93MB
+ a63160a5eda1 Extracting [======================>                            ]  22.54MB/49.93MB
  a63160a5eda1 Extracting [===============================>                   ]  31.46MB/49.93MB
- a63160a5eda1 Extracting [======================================>            ]   38.8MB/49.93MB
- a63160a5eda1 Extracting [===========================================>       ]  43.52MB/49.93MB
+ a63160a5eda1 Extracting [======================================>            ]  38.27MB/49.93MB
+ a63160a5eda1 Extracting [=============================================>     ]  45.61MB/49.93MB
  a63160a5eda1 Extracting [==================================================>]  49.93MB/49.93MB
  a63160a5eda1 Pull complete 
  7534d1db9f8d Extracting [==================================================>]     316B/316B
  7534d1db9f8d Extracting [==================================================>]     316B/316B
  7534d1db9f8d Pull complete 
  49ec2dab01d9 Extracting [>                                                  ]  557.1kB/129.4MB
- 49ec2dab01d9 Extracting [===>                                               ]  8.913MB/129.4MB
- 49ec2dab01d9 Extracting [====>                                              ]  12.81MB/129.4MB
- 49ec2dab01d9 Extracting [=======>                                           ]  20.05MB/129.4MB
- 49ec2dab01d9 Extracting [=========>                                         ]  25.07MB/129.4MB
- 49ec2dab01d9 Extracting [===========>                                       ]  30.64MB/129.4MB
+ 49ec2dab01d9 Extracting [===>                                               ]  8.356MB/129.4MB
+ 49ec2dab01d9 Extracting [=====>                                             ]  13.37MB/129.4MB
+ 49ec2dab01d9 Extracting [=======>                                           ]   19.5MB/129.4MB
+ 49ec2dab01d9 Extracting [=========>                                         ]  23.95MB/129.4MB
+ 49ec2dab01d9 Extracting [==========>                                        ]  27.85MB/129.4MB
+ 49ec2dab01d9 Extracting [============>                                      ]   31.2MB/129.4MB
  49ec2dab01d9 Extracting [============>                                      ]  32.31MB/129.4MB
  49ec2dab01d9 Extracting [============>                                      ]  32.87MB/129.4MB
  49ec2dab01d9 Extracting [============>                                      ]  33.42MB/129.4MB
+ 49ec2dab01d9 Extracting [=============>                                     ]  33.98MB/129.4MB
  49ec2dab01d9 Extracting [=============>                                     ]  34.54MB/129.4MB
+ 49ec2dab01d9 Extracting [=============>                                     ]  35.09MB/129.4MB
  49ec2dab01d9 Extracting [=============>                                     ]  35.65MB/129.4MB
  49ec2dab01d9 Extracting [=============>                                     ]  36.21MB/129.4MB
  49ec2dab01d9 Extracting [==============>                                    ]  37.32MB/129.4MB
  49ec2dab01d9 Extracting [==============>                                    ]  37.88MB/129.4MB
  49ec2dab01d9 Extracting [==============>                                    ]  38.44MB/129.4MB
  49ec2dab01d9 Extracting [===============>                                   ]  38.99MB/129.4MB
+ 49ec2dab01d9 Extracting [===============>                                   ]  39.55MB/129.4MB
  49ec2dab01d9 Extracting [===============>                                   ]  40.11MB/129.4MB
+ 49ec2dab01d9 Extracting [===============>                                   ]  40.67MB/129.4MB
  49ec2dab01d9 Extracting [===============>                                   ]  41.22MB/129.4MB
+ 49ec2dab01d9 Extracting [================>                                  ]  41.78MB/129.4MB
  49ec2dab01d9 Extracting [================>                                  ]  42.34MB/129.4MB
  49ec2dab01d9 Extracting [================>                                  ]  42.89MB/129.4MB
+ 49ec2dab01d9 Extracting [================>                                  ]  43.45MB/129.4MB
  49ec2dab01d9 Extracting [=================>                                 ]  44.01MB/129.4MB
  49ec2dab01d9 Extracting [=================>                                 ]  44.56MB/129.4MB
+ 49ec2dab01d9 Extracting [=================>                                 ]  45.12MB/129.4MB
  49ec2dab01d9 Extracting [=================>                                 ]  45.68MB/129.4MB
  49ec2dab01d9 Extracting [=================>                                 ]  46.24MB/129.4MB
- 49ec2dab01d9 Extracting [==================>                                ]  47.91MB/129.4MB
+ 49ec2dab01d9 Extracting [==================>                                ]  46.79MB/129.4MB
+ 49ec2dab01d9 Extracting [==================>                                ]  49.02MB/129.4MB
  49ec2dab01d9 Extracting [===================>                               ]  49.58MB/129.4MB
- 49ec2dab01d9 Extracting [====================>                              ]  52.92MB/129.4MB
- 49ec2dab01d9 Extracting [=======================>                           ]  61.28MB/129.4MB
- 49ec2dab01d9 Extracting [==========================>                        ]  69.63MB/129.4MB
- 49ec2dab01d9 Extracting [==============================>                    ]  77.99MB/129.4MB
- 49ec2dab01d9 Extracting [=================================>                 ]   86.9MB/129.4MB
- 49ec2dab01d9 Extracting [=====================================>             ]  96.93MB/129.4MB
- 49ec2dab01d9 Extracting [=========================================>         ]    107MB/129.4MB
- 49ec2dab01d9 Extracting [=============================================>     ]  117.5MB/129.4MB
+ 49ec2dab01d9 Extracting [===================>                               ]  50.69MB/129.4MB
+ 49ec2dab01d9 Extracting [=====================>                             ]  56.26MB/129.4MB
+ 49ec2dab01d9 Extracting [========================>                          ]  64.06MB/129.4MB
+ 49ec2dab01d9 Extracting [===========================>                       ]   71.3MB/129.4MB
+ 49ec2dab01d9 Extracting [==============================>                    ]   79.1MB/129.4MB
+ 49ec2dab01d9 Extracting [=================================>                 ]  87.46MB/129.4MB
+ 49ec2dab01d9 Extracting [=====================================>             ]  96.37MB/129.4MB
+ 49ec2dab01d9 Extracting [=========================================>         ]  106.4MB/129.4MB
+ 49ec2dab01d9 Extracting [============================================>      ]  116.4MB/129.4MB
  49ec2dab01d9 Extracting [================================================>  ]  124.8MB/129.4MB
  49ec2dab01d9 Extracting [==================================================>]  129.4MB/129.4MB
  49ec2dab01d9 Pull complete 
@@ -169,9 +178,9 @@ ls: cannot access 'etc': No such file or directory
   bnetserver health: healthy
 --- host ./etc after first up:
 total 24
-drwxr-xr-x  2 root   root    4096 Sep  5 11:15 .
-drwxr-xr-x 10 runner runner  4096 Sep  5 11:15 ..
--rw-rw-rw-  1 root   root   15746 Sep  5 11:15 bnetserver.conf
+drwxrwxrwx  2 root   root    4096 Sep  5 11:48 .
+drwxr-xr-x 10 runner runner  4096 Sep  5 11:48 ..
+-rw-rw-rw-  1 root   root   15746 Sep  5 11:48 bnetserver.conf
 --- effective settings in ./etc/bnetserver.conf:
 LogsDir = "/opt/tc/logs"
 BattlenetPort = 1119
@@ -184,18 +193,18 @@ LoginDatabaseInfo = "mysql;3306;root;wow;auth"
 ## 2. user edits persist; DB line is re-applied
 ```
 --- before restart:
-77:LoginREST.Port = 8081
-246:LoginDatabaseInfo = "mysql;3306;root;wow;auth"
+77:LoginREST.Port = 9999
+246:LoginDatabaseInfo = "bogus;1;bad;bad;auth"
 447:# ARENA_USER_EDIT_MARKER
  Container wow343-bnetserver-1  Restarting
  Container wow343-bnetserver-1  Started
   bnetserver health after restart: healthy
 --- after restart:
-77:LoginREST.Port = 8081
+77:LoginREST.Port = 9999
 246:LoginDatabaseInfo = "mysql;3306;root;wow;auth"
 447:# ARENA_USER_EDIT_MARKER
 MARKER_PERSISTED
-SETTING_LOST
+SETTING_PERSISTED
 DBLINE_REAPPLIED
 DBLINE_CLEAN
 ```
@@ -229,34 +238,28 @@ DBLINE_CLEAN
  Container wow343-worldserver-1  Starting
  Container wow343-worldserver-1  Started
 --- host ./etc:
-total 172
-drwxr-xr-x  2 root   root     4096 Sep  5 11:15 .
-drwxr-xr-x 10 runner runner   4096 Sep  5 11:15 ..
--rw-rw-rw-  1 root   root    15771 Sep  5 11:15 bnetserver.conf
--rw-r--r--  1 root   root   150094 Sep  5 11:15 worldserver.conf
+total 156
+drwxrwxrwx  2 root   root     4096 Sep  5 11:48 .
+drwxr-xr-x 10 runner runner   4096 Sep  5 11:48 ..
+-rw-r--r--  1 root   root   150130 Sep  5 11:48 worldserver.conf
 --- effective settings in ./etc/worldserver.conf:
 DataDir = "/opt/tc/data"
 LogsDir = "/opt/tc/logs"
-LoginDatabaseInfo = "mysql;3306;root;wow;auth"
-WorldDatabaseInfo     = "mysql;3306;root;wow;world"
-CharacterDatabaseInfo = "mysql;3306;root;wow;characters"
-HotfixDatabaseInfo    = "mysql;3306;root;wow;hotfixes"
+LoginDatabaseInfo     = "127.0.0.1;3306;trinity;trinity;auth"
+WorldDatabaseInfo     = "127.0.0.1;3306;trinity;trinity;world"
+CharacterDatabaseInfo = "127.0.0.1;3306;trinity;trinity;characters"
+HotfixDatabaseInfo    = "127.0.0.1;3306;trinity;trinity;hotfixes"
 SourceDirectory  = ""
 WORLDSERVER_CONF_SEEDED
 --- last 15 worldserver log lines:
-    \ \ \ \ \/ \ \ \/\ \/\ \ \ \ \ \_\ \ \_\ \
-     \ \_\ \_\  \ \_\ \_\ \_\ \_\ \__\\/`____ \
-      \/_/\/_/   \/_/\/_/\/_/\/_/\/__/ `/___/> \
-                                 C O R E  /\___/
-http://TrinityCore.org                    \/__/
-
-Using configuration file /opt/tc/conf/worldserver.conf.
-Using SSL version: OpenSSL 3.0.13 30 Jan 2024 (library: OpenSSL 3.0.13 30 Jan 2024)
-Using Boost version: 1.83.0
-Updating Auth database...
-DBUpdater: The given source directory /src does not exist, change the path to the directory where your sql directory exists (for example c:\source\trinitycore). Shutting down.
-Could not update the Login database, see log for details.
 [entrypoint] waiting for MySQL at mysql:3306 ...
 [entrypoint] MySQL is up.
 [entrypoint] ensuring databases exist ...
+[entrypoint] importing auth_database.sql -> auth (this can take a while)
+[entrypoint] importing characters_database.sql -> characters (this can take a while)
+[entrypoint] importing hotfixes_database.sql -> hotfixes (this can take a while)
+[entrypoint] importing zz_arena_marker.sql -> world (this can take a while)
+[entrypoint] first run — seeding /opt/tc/conf/worldserver.conf from worldserver.conf.dist
+[entrypoint]   edit it on the host at ./etc/worldserver.conf, then: docker compose restart worldserver
+[entrypoint]   (only the *DatabaseInfo lines are rewritten on each boot)
 ```
