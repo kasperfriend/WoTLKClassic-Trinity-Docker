@@ -126,6 +126,7 @@ services:
     environment: *dbenv
     ports:
       - "8085:8085"
+      - "8086:8086"
     volumes: *vol
     depends_on:
       mysql:
