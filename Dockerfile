@@ -119,10 +119,11 @@ COPY --from=builder /src/src/server/bnetserver/bnetserver.key.pem /opt/tc/etc/
 COPY runtime/entrypoint.sh /usr/local/bin/entrypoint.sh
 COPY runtime/healthcheck.sh /usr/local/bin/healthcheck.sh
 RUN chmod +x /usr/local/bin/entrypoint.sh /usr/local/bin/healthcheck.sh \
- && mkdir -p /opt/tc/data /opt/tc/logs /opt/tc/import/world
+ && mkdir -p /opt/tc/data /opt/tc/logs /opt/tc/import/world /opt/tc/conf
 
 ENV TZ=UTC \
     AUTO_DOWNLOAD_DB=true \
+    TC_CONF_DIR=/opt/tc/conf \
     REALM_NAME="TrinityCore 3.4.3" \
     REALM_ADDRESS=127.0.0.1
 

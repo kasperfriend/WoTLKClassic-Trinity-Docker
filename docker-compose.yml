@@ -55,9 +55,10 @@ services:
       - "1119:1119"   # battle.net logon protocol
       - "8081:8081"   # login REST service
     volumes: &vol
-      - ./data:/opt/tc/data
-      - ./logs:/opt/tc/logs
-      - ./import:/opt/tc/import
+      - ./data:/opt/tc/data     # dbc / maps / vmaps / mmaps (client data)
+      - ./logs:/opt/tc/logs     # server log files
+      - ./import:/opt/tc/import # drop *.sql dumps into ./import/world
+      - ./etc:/opt/tc/conf      # worldserver.conf / bnetserver.conf — editable
     depends_on:
       mysql:
         condition: service_healthy

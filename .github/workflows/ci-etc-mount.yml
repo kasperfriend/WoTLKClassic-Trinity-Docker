@@ -1,0 +1,104 @@
+# TEMPORARY: verifies ./etc config seeding + edit persistence.
+name: ci-etc-mount
+
+on:
+  workflow_dispatch:
+  push:
+    branches: ["arena/**"]
+    paths:
+      - ".github/workflows/ci-etc-mount.yml"
+      - "runtime/entrypoint.sh"
+      - "docker-compose.yml"
+
+permissions:
+  contents: write
+  packages: read
+
+jobs:
+  etc:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Build
+        shell: bash
+        run: docker build -t trinitycore-3.4.3:local . 2>&1 | tail -12
+
+      - name: Test the ./etc mount
+        shell: bash
+        continue-on-error: true
+        run: |
+          R="$GITHUB_WORKSPACE/ci-etc-report.md"
+          echo "# ./etc config-mount report ($(date -u +%FT%TZ))" > "$R"
+          export SERVER_IMAGE=trinitycore-3.4.3:local AUTO_DOWNLOAD_DB=false
+
+          echo "" >> "$R"; echo "## 1. bnetserver: conf seeded on first up" >> "$R"; echo '```' >> "$R"
+          ls -la etc 2>/dev/null >> "$R" || echo "(./etc does not exist yet - expected)" >> "$R"
+          docker compose up -d --no-build mysql bnetserver >> "$R" 2>&1 \
+            && echo "COMPOSE_UP_OK" >> "$R" || echo "COMPOSE_UP_FAILED" >> "$R"
+          H=missing
+          for _ in $(seq 1 30); do
+            H="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' wow343-bnetserver-1 2>/dev/null || echo missing)"
+            [ "$H" = healthy ] && break; sleep 5
+          done
+          echo "  bnetserver health: $H" >> "$R"
+          echo "--- host ./etc after first up:" >> "$R"
+          ls -la etc >> "$R" 2>&1
+          echo "--- effective settings in ./etc/bnetserver.conf:" >> "$R"
+          grep -E "^(LoginDatabaseInfo|DataDir|LogsDir|CertificatesFile|PrivateKeyFile|Rest\.Port|Port)" etc/bnetserver.conf >> "$R" 2>&1
+          echo '```' >> "$R"
+
+          echo "" >> "$R"; echo "## 2. user edit survives a restart; DB line re-applied" >> "$R"; echo '```' >> "$R"
+          # a real setting change + a marker comment, edited ON THE HOST
+          sed -i 's/^#* *Rest\.Port *=.*/Rest.Port = 9999/' etc/bnetserver.conf 2>/dev/null || true
+          echo "# ARENA_USER_EDIT_MARKER" >> etc/bnetserver.conf
+          echo "  host file now contains:" >> "$R"
+          grep -nE "Rest\.Port|ARENA_USER_EDIT_MARKER" etc/bnetserver.conf >> "$R" 2>&1
+          # change the password in the environment: the DB line must follow
+          export MYSQL_PASSWORD=changedpw MYSQL_ROOT_PASSWORD=changedpw
+          docker compose restart bnetserver >> "$R" 2>&1
+          sleep 25
+          echo "--- after restart, host ./etc/bnetserver.conf:" >> "$R"
+          grep -nE "Rest\.Port|ARENA_USER_EDIT_MARKER|LoginDatabaseInfo" etc/bnetserver.conf >> "$R" 2>&1
+          grep -q "ARENA_USER_EDIT_MARKER" etc/bnetserver.conf \
+            && echo "EDIT_PERSISTED" >> "$R" || echo "EDIT_LOST" >> "$R"
+          grep -q "LoginDatabaseInfo *= *\"mysql;3306;root;changedpw;auth\"" etc/bnetserver.conf \
+            && echo "DBLINE_REAPPLIED" >> "$R" || echo "DBLINE_NOT_UPDATED" >> "$R"
+          grep -q "^Rest.Port = 9999" etc/bnetserver.conf \
+            && echo "SETTING_PERSISTED" >> "$R" || echo "SETTING_LOST" >> "$R"
+          echo '```' >> "$R"
+          docker compose down -v >/dev/null 2>&1 || true
+
+          echo "" >> "$R"; echo "## 3. worldserver: conf seeded (stub world table so it gets past the DB step)" >> "$R"; echo '```' >> "$R"
+          rm -rf etc logs
+          mkdir -p import/world
+          echo "CREATE TABLE IF NOT EXISTS arena_marker (id INT);" > import/world/zz_arena_marker.sql
+          unset MYSQL_PASSWORD MYSQL_ROOT_PASSWORD
+          docker compose up -d --no-build mysql worldserver >> "$R" 2>&1 || true
+          for _ in $(seq 1 24); do
+            [ -f etc/worldserver.conf ] && break; sleep 5
+          done
+          echo "--- host ./etc:" >> "$R"; ls -la etc >> "$R" 2>&1
+          echo "--- effective settings in ./etc/worldserver.conf:" >> "$R"
+          grep -E "^(LoginDatabaseInfo|WorldDatabaseInfo|CharacterDatabaseInfo|HotfixDatabaseInfo|DataDir|LogsDir|SourceDirectory)" etc/worldserver.conf >> "$R" 2>&1
+          [ -f etc/worldserver.conf ] && echo "WORLDSERVER_CONF_SEEDED" >> "$R" || echo "WORLDSERVER_CONF_MISSING" >> "$R"
+          echo "--- last 12 worldserver log lines:" >> "$R"
+          docker logs --tail 12 wow343-worldserver-1 2>&1 | tr -d '\000' >> "$R" 2>&1 || true
+          echo '```' >> "$R"
+          docker compose down -v >/dev/null 2>&1 || true
+          rm -rf import/world/zz_arena_marker.sql
+
+      - name: Publish
+        if: always()
+        shell: bash
+        run: |
+          [ -f ci-etc-report.md ] || echo "no report" > ci-etc-report.md
+          cat ci-etc-report.md
+          git config user.name "arena-diagnostic[bot]"
+          git config user.email "arena-diagnostic[bot]@users.noreply.github.com"
+          git add ci-etc-report.md
+          git commit -m "ci: etc-mount report" || echo "nothing to commit"
+          git pull --rebase origin "$GITHUB_REF_NAME" || true
+          git push origin "HEAD:$GITHUB_REF_NAME"

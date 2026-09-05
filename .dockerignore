@@ -2,6 +2,7 @@
 source/
 data/
 logs/
+etc/
 import/
 *.sql
 .env

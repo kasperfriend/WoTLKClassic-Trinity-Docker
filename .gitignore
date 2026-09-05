@@ -1,6 +1,7 @@
 # Local runtime data
 data/
 logs/
+etc/
 import/*
 !import/world/
 import/world/*

@@ -194,9 +194,57 @@ GitHub repo:
 database, everything else goes to `world`). Set `AUTO_DOWNLOAD_DB=false`
 to skip the automatic download entirely.
 
-**Ports:** `1119` (battle.net logon protocol), `8081` (login REST), `8085` (world) ·
-**Volumes:** `./data` → `/opt/tc/data`, `./logs` → `/opt/tc/logs`,
-`./import` → `/opt/tc/import`, named volume `mysql-data`.
+**Ports:** `1119` (battle.net logon protocol), `8081` (login REST), `8085` (world).
+
+---
+
+## Files on your PC (all four folders are bind-mounted)
+
+Everything you ever need to touch lives in the repo folder as an ordinary
+directory — no `docker cp`, no editing inside a container. Docker creates all
+four on first `up`.
+
+| On your PC | In the container | What goes there |
+|---|---|---|
+| `./data` | `/opt/tc/data` | Client data: `dbc/`, `maps/`, `vmaps/`, `mmaps/` (from `helpers/extract-data.sh`) |
+| `./etc` | `/opt/tc/conf` | **`worldserver.conf` and `bnetserver.conf` — yours to edit** |
+| `./logs` | `/opt/tc/logs` | Server log files (`Worldserver.log`, `Bnet.log`, …) |
+| `./import/world` | `/opt/tc/import/world` | Your own `*.sql` dumps, imported on the next boot |
+
+MySQL itself is a named volume (`mysql-data`), not a folder — dump it with
+`docker compose exec mysql mysqldump -uroot -p"$MYSQL_ROOT_PASSWORD" --all-databases`
+if you want a backup.
+
+### Editing the server configs
+
+`./etc/worldserver.conf` and `./etc/bnetserver.conf` are seeded from the
+upstream `.conf.dist` templates on **first run only**. After that the file is
+yours:
+
+```bash
+docker compose up -d            # first run seeds ./etc/*.conf
+nano etc/worldserver.conf       # change anything you like
+docker compose restart worldserver
+```
+
+* **Preserved across restarts:** every setting you edit — motd, rates,
+  `Logger.*`, `MaxPingTime`, `GameType`, anything.
+* **Re-applied on every boot:** only the four `*DatabaseInfo` lines
+  (`Login`/`World`/`Character`/`Hotfix`), because they are built from the
+  `MYSQL_*` variables in `.env`. Change the password in `.env` and the conf
+  follows automatically — don't hand-edit those lines.
+* **Reset to defaults:** delete the file and restart; it is re-seeded from the
+  template.
+* The pristine, fully commented templates stay inside the image at
+  `/opt/tc/etc/*.conf.dist` (`docker compose exec worldserver cat
+  /opt/tc/etc/worldserver.conf.dist`) — that is why the confs live in
+  `/opt/tc/conf` and not `/opt/tc/etc`: mounting over `/opt/tc/etc` would hide
+  the templates.
+
+> **Linux note:** the containers run as root, so files the server writes into
+> `./data` and `./logs` are root-owned. The seeded confs are created
+> world-writable so you can edit them without `sudo`; for the rest,
+> `sudo chown -R $USER ./data ./logs` once.
 
 > **Tip:** the core supports config overrides via environment variables — any
 > `worldserver.conf` field can be set with a `TC_`-prefixed variable whose name is
