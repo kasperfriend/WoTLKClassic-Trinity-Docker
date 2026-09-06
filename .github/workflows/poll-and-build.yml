@@ -156,7 +156,9 @@ jobs:
           # SERVER_PULL_POLICY=always is required here: the compose default is
           # 'never' so a local build never touches a registry, which would make
           # this step refuse to use the just-pushed GHCR image.
-          AUTO_DOWNLOAD_DB=false SERVER_IMAGE="$IMAGE" SERVER_PULL_POLICY=always docker compose up -d --no-build mysql bnetserver
+          AUTO_DOWNLOAD_DB=false REALM_ADDRESS=192.0.2.10 \
+            SERVER_IMAGE="$IMAGE" SERVER_PULL_POLICY=always \
+            docker compose up -d --no-build mysql bnetserver
           H=missing
           for _ in $(seq 1 36); do
             H="$(docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' wow343-bnetserver-1 2>/dev/null || echo missing)"
@@ -164,9 +166,24 @@ jobs:
             [ "$H" = healthy ] && break
             sleep 5
           done
+          # Exercise the HTTPS half of login and verify that it advertises the
+          # same reachable host as REALM_ADDRESS. Health itself must be passive:
+          # any active probe of 1119 regresses to noisy "stream truncated" logs.
+          PORTAL="$(docker exec wow343-bnetserver-1 \
+            curl -fksS https://127.0.0.1:8081/bnetserver/portal/ 2>/dev/null || true)"
+          echo "  advertised bnet portal: ${PORTAL:-<request failed>}"
+          REALM_ROW="$(docker exec wow343-mysql-1 mysql -uroot -pwow -N -B \
+            -e \"SELECT CONCAT_WS('|', address, localAddress, port, gamebuild) FROM auth.realmlist WHERE id=1\" \
+            2>/dev/null || true)"
+          echo "  realmlist route: ${REALM_ROW:-<query failed>}"
+          TLS_NOISE="$(docker logs wow343-bnetserver-1 2>&1 | tr -d '\000' | grep -c 'SSL Handshake failed' || true)"
           docker logs --tail 20 wow343-bnetserver-1 2>&1 | tr -d '\000' || true
           docker compose down -v >/dev/null 2>&1 || true
           [ "$H" = healthy ] || { echo "bnetserver never became healthy"; exit 1; }
+          [ "$PORTAL" = "192.0.2.10:1119" ] || { echo "bnet REST advertised the wrong portal"; exit 1; }
+          [ "$REALM_ROW" = "192.0.2.10|192.0.2.10|8085|54261" ] \
+            || { echo "auth.realmlist has the wrong client route/build"; exit 1; }
+          [ "$TLS_NOISE" = 0 ] || { echo "healthcheck caused $TLS_NOISE failed TLS handshakes"; exit 1; }
           echo "SMOKE_OK"
 
       # ------------------------------------------------------------------

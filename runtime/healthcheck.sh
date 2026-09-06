@@ -1,26 +1,40 @@
 #!/usr/bin/env bash
-# Health: is a server process running AND listening on its port?
-# worldserver -> 8085, bnetserver -> 1119
+# Health: is the expected server process running AND listening on every port it
+# needs? worldserver -> 8085; bnetserver -> 1119 (Battle.net) + 8081 (REST).
 set -u
-check_port() {
-  (exec 3<>"/dev/tcp/127.0.0.1/$1") 2>/dev/null || return 1
-  exec 3>&- 3<&- || true
-  return 0
+
+# Do not connect to a TLS port just to test it. A TCP probe that closes before
+# completing/cleanly shutting down TLS makes bnetserver log:
+#
+#   SSL Handshake failed stream truncated
+#
+# Even `openssl s_client` is unsuitable here: once stdin reaches EOF it can
+# close in a way the server reports as a truncated stream. Read Linux's socket
+# table instead. State 0A is LISTEN; port matching is independent of the bind
+# address and covers both IPv4 and IPv6.
+check_listening_port() {
+  local port_hex
+  printf -v port_hex '%04X' "$1"
+
+  awk -v port="$port_hex" '
+    NR > 1 {
+      split($2, endpoint, ":")
+      if (toupper(endpoint[2]) == port && $4 == "0A")
+        found = 1
+    }
+    END { exit(found ? 0 : 1) }
+  ' /proc/net/tcp /proc/net/tcp6 2>/dev/null
 }
-# bnetserver speaks TLS on 1119. A bare /dev/tcp probe only makes a raw TCP
-# connection and immediately closes it, which bnetserver logs as
-# "SSL Handshake failed stream truncated" every time Docker's healthcheck runs.
-# Use a real TLS handshake when openssl is available (the image ships it).
-check_bnet_tls() {
-  command -v openssl >/dev/null 2>&1 || return 1
-  timeout 3 openssl s_client -connect 127.0.0.1:1119 -tls1_2 </dev/null >/dev/null 2>&1
-}
+
 if pgrep -x worldserver >/dev/null 2>&1; then
-  check_port 8085 || exit 1
+  check_listening_port 8085 || exit 1
   exit 0
 fi
+
 if pgrep -x bnetserver >/dev/null 2>&1; then
-  check_bnet_tls || check_port 1119 || exit 1
+  check_listening_port 1119 || exit 1
+  check_listening_port 8081 || exit 1
   exit 0
 fi
+
 exit 1

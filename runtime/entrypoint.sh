@@ -253,15 +253,28 @@ fi
 # ============================================================================
 REALM_NAME="${REALM_NAME:-TrinityCore 3.4.3}"
 REALM_ADDRESS="${REALM_ADDRESS:-127.0.0.1}"
+# Docker's bridge/NAT hides the client's real LAN subnet from the core, so the
+# safest default is to advertise the same host-reachable address for local and
+# external clients. Operators with a host-network deployment can override it.
+REALM_LOCAL_ADDRESS="${REALM_LOCAL_ADDRESS:-$REALM_ADDRESS}"
 REALM_PORT="${REALM_PORT:-8085}"
+# This distribution and its auth seed are specifically for 3.4.3.54261.
+CLIENT_BUILD=54261
+case "$REALM_PORT" in
+  ''|*[!0-9]*) die "REALM_PORT must be a numeric TCP port (got '$REALM_PORT')" ;;
+esac
+[ "$REALM_PORT" -ge 1 ] && [ "$REALM_PORT" -le 65535 ] \
+  || die "REALM_PORT must be between 1 and 65535 (got '$REALM_PORT')"
 esc() { printf '%s' "$1" | sed "s/'/\\\\'/g"; }
-RN="$(esc "$REALM_NAME")"; RA="$(esc "$REALM_ADDRESS")"
+RN="$(esc "$REALM_NAME")"; RA="$(esc "$REALM_ADDRESS")"; RLA="$(esc "$REALM_LOCAL_ADDRESS")"
 
-q "INSERT INTO \`auth\`.\`realmlist\` (id, name, address, port)
-     SELECT 1, '${RN}', '${RA}', ${REALM_PORT}
+q "INSERT INTO \`auth\`.\`realmlist\`
+       (id, name, address, localAddress, port, gamebuild)
+     SELECT 1, '${RN}', '${RA}', '${RLA}', ${REALM_PORT}, ${CLIENT_BUILD}
      WHERE NOT EXISTS (SELECT 1 FROM \`auth\`.\`realmlist\` WHERE id = 1);
    UPDATE \`auth\`.\`realmlist\`
-     SET name = '${RN}', address = '${RA}', port = ${REALM_PORT}
+     SET name = '${RN}', address = '${RA}', localAddress = '${RLA}',
+         port = ${REALM_PORT}, gamebuild = ${CLIENT_BUILD}
      WHERE id = 1;" 2>/dev/null || warn "could not update realmlist (auth DB not ready?)"
 
 # ============================================================================
@@ -340,10 +353,11 @@ fi
 #                    wire the container paths (DataDir/LogsDir/SourceDirectory,
 #                    and the bnet TLS cert paths)
 #    * every run  -> re-apply the *DatabaseInfo lines (they must track the
-#                    MYSQL_* env vars) and, when they still carry pristine
-#                    non-container defaults, the DataDir/LogsDir/SourceDirectory
-#                    (world) or TLS cert paths (bnet). Explicit user edits to
-#                    those path settings are kept.
+#                    MYSQL_* env vars), bnet's LoginREST addresses (they track
+#                    REALM_ADDRESS / LOGIN_REST_*), and, when they still carry
+#                    pristine non-container defaults, DataDir/LogsDir/
+#                    SourceDirectory (world) or TLS cert paths (bnet). Explicit
+#                    user edits to the other path settings are kept.
 #    Everything else you edit on the host survives restarts. To go back to
 #    defaults, delete the file and restart — it is re-seeded from the template.
 # ============================================================================
@@ -371,7 +385,7 @@ if [ -f "$conf_target" ]; then
 else
   log "first run — seeding $conf_target from $(basename "$conf_dist")"
   log "  edit it on the host at ./etc/${SERVER}.conf, then: docker compose restart ${SERVER}"
-  log "  (the *DatabaseInfo lines follow .env on each boot; container path settings are also re-wired if they are still at the stock defaults)"
+  log "  (*DatabaseInfo and bnet LoginREST address lines follow .env on each boot; container path settings are also re-wired if still at stock defaults)"
   cp "$conf_dist" "$conf_target" || die "cannot write $conf_target"
   # Container paths — written once; change them here if you mount elsewhere.
   replace "DataDir" "DataDir = \"${TC_DATA_DIR:-/opt/tc/data}\""
@@ -418,6 +432,17 @@ if [ "$SERVER" = "worldserver" ]; then
   replace "WorldDatabaseInfo"     "WorldDatabaseInfo     = \"$(db_info world)\""
   replace "CharacterDatabaseInfo" "CharacterDatabaseInfo = \"$(db_info characters)\""
   replace "HotfixDatabaseInfo"    "HotfixDatabaseInfo    = \"$(db_info hotfixes)\""
+else
+  # Login is a two-stage flow: the client connects to bnetserver, then the REST
+  # response tells it which host to use for HTTPS/SRP. Leaving these at the
+  # template's 127.0.0.1 makes every LAN/remote client call itself and fail.
+  # Derive both from REALM_ADDRESS by default because Docker NAT prevents the
+  # core from reliably distinguishing the host's LAN from outside clients.
+  LOGIN_REST_EXTERNAL_ADDRESS="${LOGIN_REST_EXTERNAL_ADDRESS:-$REALM_ADDRESS}"
+  LOGIN_REST_LOCAL_ADDRESS="${LOGIN_REST_LOCAL_ADDRESS:-$REALM_LOCAL_ADDRESS}"
+  replace "LoginREST.ExternalAddress" "LoginREST.ExternalAddress = ${LOGIN_REST_EXTERNAL_ADDRESS}"
+  replace "LoginREST.LocalAddress"    "LoginREST.LocalAddress = ${LOGIN_REST_LOCAL_ADDRESS}"
+  log "login endpoints advertise ${LOGIN_REST_EXTERNAL_ADDRESS}:1119 (external) / ${LOGIN_REST_LOCAL_ADDRESS}:1119 (local)"
 fi
 
 # ============================================================================
