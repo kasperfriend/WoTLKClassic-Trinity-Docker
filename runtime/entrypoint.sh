@@ -32,9 +32,14 @@ BIN_DIR="${TC_BIN_DIR:-/opt/tc/bin}"
 ETC_DIR="${TC_ETC_DIR:-/opt/tc/etc}"
 SQL_DIR="${TC_SQL_DIR:-/opt/tc/sql}"
 IMPORT_DIR="${TC_IMPORT_DIR:-/opt/tc/import/world}"
-# Official full-database release for this source (world/hotfixes/auth/characters).
-# Override DB_URL in the environment if the author publishes a newer one.
-DB_URL="${DB_URL:-https://github.com/lineagedr/3.4.3_Source/releases/download/databases/Databases.7z}"
+# Official full-database release for this source revision.
+#   WORLD_DB_URL / HOTFIXES_DB_URL  -> the source's own MySQL dumps (preferred)
+#   DB_URL                          -> legacy safety net: a .7z bundle containing
+#                                       auth/characters/hotfixes/world dumps
+# Override any of them in the environment if the author publishes a newer one.
+WORLD_DB_URL="${WORLD_DB_URL:-https://github.com/xHashii/WyrmrestCore/releases/download/DB.2608/world_full_2026_08_10.sql}"
+HOTFIXES_DB_URL="${HOTFIXES_DB_URL:-https://github.com/xHashii/WyrmrestCore/releases/download/DB.2608/hotfixes_full_2026_08_10.sql}"
+DB_URL="${DB_URL:-}"
 
 # ---- DB connection settings -------------------------------------------------
 MYSQL_HOST="${MYSQL_HOST:-mysql}"
@@ -164,8 +169,12 @@ if [ "$SERVER" = "worldserver" ]; then
     import_sql hotfixes "$SQL_DIR/base/hotfixes_database.sql"
   fi
 
-  # ---- world --------------------------------------------------------------
-  if [ "$(table_count world)" -eq 0 ]; then
+  # ---- world / hotfixes ---------------------------------------------------
+  # The source does not ship a world/hotfixes base schema; it expects the
+  # full dumps from its own DB release (see revision_data.h). If either is
+  # empty, try in this order: user dumps in ./import/world, the source's full
+  # dumps, then the legacy .7z bundle, then keep waiting for import dumps.
+  if [ "$(table_count world)" -eq 0 ] || [ "$(table_count hotfixes)" -eq 0 ]; then
 
     imported=false
 
@@ -179,27 +188,54 @@ if [ "$SERVER" = "worldserver" ]; then
 
     # 4b. official full-database release for this source (auto-download)
     if [ "$imported" = false ] && [ "${AUTO_DOWNLOAD_DB:-true}" = "true" ]; then
-      log "world DB is empty — downloading the official database bundle (~48 MB) ..."
-      log "  $DB_URL"
       mkdir -p /tmp/dbdl
-      if curl -fL --retry 3 --progress-bar -o /tmp/dbdl/db.7z "$DB_URL"; then
-        7z x -y -o/tmp/dbdl/x /tmp/dbdl/db.7z >/dev/null
-        for f in $(find /tmp/dbdl/x -name '*.sql' | sort); do
-          route_import "$f"
-          imported=true
-        done
-        rm -rf /tmp/dbdl
+
+      if [ -n "$DB_URL" ]; then
+        # legacy safety net: one .7z that holds all four DB dumps
+        log "downloading the legacy database bundle ..."
+        log "  $DB_URL"
+        if curl -fL --retry 3 --progress-bar -o /tmp/dbdl/db.7z "$DB_URL"; then
+          7z x -y -o/tmp/dbdl/x /tmp/dbdl/db.7z >/dev/null
+          for f in $(find /tmp/dbdl/x -name '*.sql' | sort); do
+            route_import "$f"
+            imported=true
+          done
+        else
+          warn "legacy database bundle download failed — will wait for import dumps."
+        fi
       else
-        warn "database bundle download failed — will wait for import dumps."
+        # current release: separate world + hotfixes SQL files
+        if [ "$(table_count world)" -eq 0 ]; then
+          log "downloading the official world database ..."
+          log "  $WORLD_DB_URL"
+          if curl -fL --retry 3 --progress-bar -o /tmp/dbdl/world.sql "$WORLD_DB_URL"; then
+            route_import /tmp/dbdl/world.sql
+            imported=true
+          else
+            warn "world database download failed."
+          fi
+        fi
+
+        if [ "$(table_count hotfixes)" -eq 0 ]; then
+          log "downloading the official hotfixes database ..."
+          log "  $HOTFIXES_DB_URL"
+          if curl -fL --retry 3 --progress-bar -o /tmp/dbdl/hotfixes.sql "$HOTFIXES_DB_URL"; then
+            route_import /tmp/dbdl/hotfixes.sql
+            imported=true
+          else
+            warn "hotfixes database download failed."
+          fi
+        fi
       fi
+      rm -rf /tmp/dbdl
     fi
 
     # 4c. still nothing → wait, re-checking for import files every 60 s
-    if [ "$imported" = false ] && [ "$(table_count world)" -eq 0 ]; then
-      warn "world DB is empty (no dumps found and AUTO_DOWNLOAD_DB=${AUTO_DOWNLOAD_DB:-true})"
+    if [ "$imported" = false ] && { [ "$(table_count world)" -eq 0 ] || [ "$(table_count hotfixes)" -eq 0 ]; }; then
+      warn "world/hotfixes DB is incomplete (no dumps found and AUTO_DOWNLOAD_DB=${AUTO_DOWNLOAD_DB:-true})"
       log ">>> Put your DB dumps into  ./import/world/*.sql  on the host."
       log ">>> Waiting for import files (checking every 60 s) ..."
-      while [ "$(table_count world)" -eq 0 ]; do
+      while [ "$(table_count world)" -eq 0 ] || [ "$(table_count hotfixes)" -eq 0 ]; do
         if ls "$IMPORT_DIR"/*.sql >/dev/null 2>&1; then
           for f in $(ls "$IMPORT_DIR"/*.sql | sort); do
             route_import "$f"
@@ -228,6 +264,67 @@ q "INSERT INTO \`auth\`.\`realmlist\` (id, name, address, port)
      SET name = '${RN}', address = '${RA}', port = ${REALM_PORT}
      WHERE id = 1;" 2>/dev/null || warn "could not update realmlist (auth DB not ready?)"
 
+# ============================================================================
+# 5b. Make sure the built-in DBUpdater knows where the source's sql/updates
+#     live.
+#
+#     worldserver reads `updates_include` from each database to decide which
+#     directories to scan. The source's sql/base files create the table but
+#     deliberately leave it empty (the full DB dumps used to seed it), so a
+#     container that boots from sql/base + the source's full dumps would skip
+#     every sql/updates file and run a stale core/DB mix. Seed the canonical
+#     $/sql/updates paths for world/hotfixes here; INSERT ... ON DUPLICATE
+#     keeps any operator extensions intact while adding the rows this image
+#     needs.
+#
+#     auth/characters are intentionally NOT seeded. The source's current
+#     auth/characters update trees contain dev/test seed data (DELETE +
+#     re-INSERT), and applying that on an existing server would wipe operator
+#     accounts/characters. Their base schemas are current in this source; the
+#     only runtime-required auth fix (build_info for client 54261) is applied
+#     directly below instead.
+# ============================================================================
+log "seeding database updater paths ..."
+for db_name in world hotfixes; do
+  # A full dump normally carries the right updates_include rows already. Only
+  # seed ours when that table is empty: adding a second path for the same tree
+  # would make DBUpdater see the same update files twice ("Duplicate filename").
+  include_count="$("$MYSQL_CLI" -h "$MYSQL_HOST" -P "$MYSQL_PORT" -u "$MYSQL_USER" -N -B \
+    -e "SELECT COUNT(*) FROM \`${db_name}\`.\`updates_include\`;" 2>/dev/null || echo 0)"
+
+  if [ "${include_count:-0}" -eq 0 ]; then
+    # CREATE TABLE IF NOT EXISTS is safe even when the table already exists.
+    q "CREATE TABLE IF NOT EXISTS \`${db_name}\`.\`updates\` (
+         \`name\` varchar(200) COLLATE utf8mb4_unicode_ci NOT NULL,
+         \`hash\` char(40) COLLATE utf8mb4_unicode_ci DEFAULT '',
+         \`state\` enum('RELEASED','ARCHIVED') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'RELEASED',
+         \`timestamp\` timestamp NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'timestamp when the query was applied.',
+         \`speed\` int unsigned NOT NULL DEFAULT '0' COMMENT 'time the query takes to apply in ms.',
+         PRIMARY KEY (\`name\`)
+       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+       CREATE TABLE IF NOT EXISTS \`${db_name}\`.\`updates_include\` (
+         \`path\` varchar(200) COLLATE utf8mb4_unicode_ci NOT NULL COMMENT 'directory to include. \$ means relative to the source directory.',
+         \`state\` enum('RELEASED','ARCHIVED') COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'RELEASED',
+         PRIMARY KEY (\`path\`)
+       ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+       INSERT INTO \`${db_name}\`.\`updates_include\` (\`path\`, \`state\`)
+       VALUES ('\$/sql/updates/${db_name}/3.4.3', 'RELEASED');" 2>/dev/null \
+      || warn "could not seed updates_include for ${db_name} (auto-updates may not run)"
+  else
+    log "  ${db_name}: updates_include already has ${include_count} row(s), keeping existing rows"
+  fi
+done
+
+# Client 3.4.3 build 54261 — the current auth base schema ships the table but
+# not this row, and we deliberately don't point the auth updater at the dev
+# seed update tree. Insert it directly so bnetserver accepts the client.
+q "INSERT IGNORE INTO \`auth\`.\`build_info\`
+    (\`build\`, \`majorVersion\`, \`minorVersion\`, \`bugfixVersion\`, \`hotfixVersion\`,
+     \`winAuthSeed\`, \`win64AuthSeed\`, \`mac64AuthSeed\`, \`winChecksumSeed\`, \`macChecksumSeed\`)
+    VALUES
+    (54261, 3, 4, 3, NULL, NULL, '25FD812475DCF26F9F1383AED37FC99E', NULL, NULL, NULL);" 2>/dev/null \
+  || warn "could not insert auth.build_info for client build 54261 (clients may be rejected)"
+
 if [ "$LOCKED" = 1 ]; then
   q "SELECT RELEASE_LOCK('tc343_db_init');" >/dev/null || true
 fi
@@ -242,8 +339,11 @@ fi
 #    * first run  -> copy <server>.conf.dist to $CONF_DIR/<server>.conf and
 #                    wire the container paths (DataDir/LogsDir/SourceDirectory,
 #                    and the bnet TLS cert paths)
-#    * every run  -> re-apply ONLY the *DatabaseInfo lines, because those come
-#                    from the MYSQL_* env vars and must track them
+#    * every run  -> re-apply the *DatabaseInfo lines (they must track the
+#                    MYSQL_* env vars) and, when they still carry pristine
+#                    non-container defaults, the DataDir/LogsDir/SourceDirectory
+#                    (world) or TLS cert paths (bnet). Explicit user edits to
+#                    those path settings are kept.
 #    Everything else you edit on the host survives restarts. To go back to
 #    defaults, delete the file and restart — it is re-seeded from the template.
 # ============================================================================
@@ -271,7 +371,7 @@ if [ -f "$conf_target" ]; then
 else
   log "first run — seeding $conf_target from $(basename "$conf_dist")"
   log "  edit it on the host at ./etc/${SERVER}.conf, then: docker compose restart ${SERVER}"
-  log "  (only the *DatabaseInfo lines are rewritten on each boot)"
+  log "  (the *DatabaseInfo lines follow .env on each boot; container path settings are also re-wired if they are still at the stock defaults)"
   cp "$conf_dist" "$conf_target" || die "cannot write $conf_target"
   # Container paths — written once; change them here if you mount elsewhere.
   replace "DataDir" "DataDir = \"${TC_DATA_DIR:-/opt/tc/data}\""
@@ -286,6 +386,26 @@ else
   # The container runs as root, so the seeded file would be root-owned on the
   # host and awkward to edit — let the host user change it without sudo.
   chmod 0666 "$conf_target" 2>/dev/null || true
+fi
+
+# Paths that are required for the container to work. When an existing conf was
+# seeded by an older image it may still have the pristine (non-container)
+# defaults ("" / "." / "./bnetserver.*.pem"). Rewrite those so an old ./etc
+# does not silently carry a stale path. Explicit user values are kept.
+reapply_container_path_if_default() { # $1 = conf key, $2 = full replacement line base, $3 = default marker
+  value="$(sed -nE "s/^[[:space:]]*$1[[:space:]]*=[[:space:]]*(.*)/\\1/p" "$conf_target" | head -1)"
+  if [ "$value" = "" ] || [ "$value" = '""' ] || [ "$value" = "." ] || [ "$value" = '"."' ] \
+     || { [ -n "$3" ] && { [ "$value" = "$3" ] || [ "$value" = "\"$3\"" ]; }; }; then
+    replace "$1" "$2"
+  fi
+}
+if [ "$SERVER" = "worldserver" ]; then
+  reapply_container_path_if_default "DataDir"        "DataDir = \"${TC_DATA_DIR:-/opt/tc/data}\"" "."
+  reapply_container_path_if_default "LogsDir"        "LogsDir = \"${TC_LOGS_DIR:-/opt/tc/logs}\"" ""
+  reapply_container_path_if_default "SourceDirectory" "SourceDirectory = \"${SQL_DIR%/sql}\"" ""
+else
+  reapply_container_path_if_default "CertificatesFile" "CertificatesFile = \"$ETC_DIR/bnetserver.cert.pem\"" "./bnetserver.cert.pem"
+  reapply_container_path_if_default "PrivateKeyFile"   "PrivateKeyFile = \"$ETC_DIR/bnetserver.key.pem\"" "./bnetserver.key.pem"
 fi
 
 db_info() { # $1 = database name
