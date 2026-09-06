@@ -296,10 +296,59 @@ bnetaccount create myuser@local mypass
 
 That also creates the game account `myuser@local#1` for you.
 
-* Client: edit the client's `realmlist.wtf` → `set realmlist 127.0.0.1`
-  (the client talks to the logon server on port 1119) and log in with
-  `myuser@local` / `mypass`.
-* For friends on your LAN set `REALM_ADDRESS` in `.env` to your LAN IP.
+* **Use the matching 64-bit 3.4.3.54261 client.** A current retail/Classic
+  client is a different build and cannot connect. Use the compatible client
+  linked by the [upstream source README](https://github.com/xHashii/3.4.3_Source#readme)
+  and start it with the launcher/executable supplied for that client; a stock
+  Battle.net-launched executable may ignore private login endpoints. With an
+  Arctium-compatible launcher on localhost, use:
+
+  ```powershell
+  & ".\Arctium WoW Launcher.exe" --version Classic --dev
+  ```
+
+  Do **not** add `--staticseed` for this image. The 54261 auth row contains the
+  client's normal `25FD…` seed; Arctium's standard static-seed patch uses a
+  different `179D…` value and authentication then ends in `BLZ51900003`.
+  `--dev` is for loopback/private-LAN testing, where the bundled development
+  TLS certificate is expected; do not use it for an Internet-facing portal.
+* In the client, edit **`WTF/Config.wtf`** and set:
+
+  ```text
+  SET portal "127.0.0.1"
+  ```
+
+  Then log in with `myuser@local` / `mypass`. WotLK **Classic** does not use
+  `realmlist.wtf`; that file is for the old 3.3.5 client and changing it has no
+  effect here. Do not put `http://` or a port in `portal`.
+* For a client on another LAN computer, set `REALM_ADDRESS` in `.env` **and**
+  the client's `portal` to the Docker host's LAN IP, then recreate the servers:
+
+  ```bash
+  docker compose up -d --force-recreate bnetserver worldserver
+  ```
+
+  `REALM_ADDRESS` now updates the realm address and both bnet REST/SRP callback
+  addresses. Older images left the latter at `127.0.0.1`, causing remote
+  clients to call themselves during login.
+
+**Quick login-path check:** this must print the same host/IP as the client's
+`portal`, followed by `:1119`:
+
+```bash
+docker compose exec bnetserver \
+  curl -fksS https://127.0.0.1:8081/bnetserver/portal/
+# default output: 127.0.0.1:1119
+```
+
+If no client is open, repeated `[127.0.0.1:random-port] SSL Handshake failed
+stream truncated` lines are from an older image's active health probe, not a
+failed login. Refresh and recreate that container:
+
+```bash
+docker compose pull
+docker compose up -d --force-recreate bnetserver worldserver
+```
 
 ### Day-to-day afterwards
 
@@ -439,7 +488,9 @@ GitHub repo:
 | `DB_URL` | empty | legacy one-file `.7z` database bundle; set it to the old `lineagedr` `databases` release only if you want that fallback instead of the current dumps |
 | `SOURCE_REPO` / `SOURCE_BRANCH` / `SOURCE_SHA` | `xHashii/3.4.3_Source` `main` | what the image is compiled from — set these if upstream ever moves |
 | `REALM_NAME` | `TrinityCore 3.4.3` | realm name in the client realm list |
-| `REALM_ADDRESS` | `127.0.0.1` | realm address clients connect to |
+| `REALM_ADDRESS` | `127.0.0.1` | bare host/IP advertised in `auth.realmlist` **and** by bnet's REST/SRP flow; use the Docker host's LAN/public address for clients on other machines |
+| `REALM_LOCAL_ADDRESS` | `REALM_ADDRESS` | advanced override for `auth.realmlist.localAddress`; normally leave unset under Docker NAT |
+| `LOGIN_REST_EXTERNAL_ADDRESS` / `LOGIN_REST_LOCAL_ADDRESS` | `REALM_ADDRESS` / `REALM_LOCAL_ADDRESS` | advanced bnet callback overrides; normally leave unset under Docker NAT |
 | `TZ` | `Europe/Kiev` | container timezone |
 
 Everything has a working default, which is why step 2 runs without an `.env`
@@ -551,12 +602,13 @@ docker compose restart worldserver
   `Logger.*`, `MaxPingTime`, `GameType`, anything.
 * **Re-applied on every boot:** the four `*DatabaseInfo` lines
   (`Login`/`World`/`Character`/`Hotfix`), because they are built from the
-  `MYSQL_*` variables in `.env`, plus the container path defaults
+  `MYSQL_*` variables in `.env`; bnet's `LoginREST.ExternalAddress` and
+  `LoginREST.LocalAddress`, because they follow `REALM_ADDRESS` (or the
+  dedicated `LOGIN_REST_*` overrides); plus the container path defaults
   (`DataDir`/`LogsDir`/`SourceDirectory`, or the bnet TLS cert paths) **when
-  they still have stock defaults** — this repairs confs left behind by an
-  older image without touching a value you deliberately changed. Change the
-  password in `.env` and the conf follows automatically — don't hand-edit
-  those lines.
+  they still have stock defaults**. This repairs confs left behind by an older
+  image without touching unrelated settings. Change managed values in `.env`,
+  not directly in these lines.
 * **Reset to defaults:** delete the file and restart; it is re-seeded from the
   template.
 * The pristine, fully commented templates stay inside the image at
@@ -592,7 +644,11 @@ and the workflow builds that instead.
 | I already have extracted data, just need to put it in the stack | `./place-data.sh /path/to/extracted` (Windows: drag the folder onto `place-data.bat`) — places `dbc maps vmaps mmaps gt cameras` into `./data`, replaces stale ones, verifies the required folders, then `docker compose restart worldserver` |
 | worldserver logs `Waiting for import files` | world/hotfixes DB are empty — either let the full DB dumps download (`AUTO_DOWNLOAD_DB=true`) or drop dumps into `./import/world/` |
 | worldserver initialises fully, then exits/restarts on an assertion | usually a stale world/hotfixes DB from an older source revision or from the legacy `Databases.7z`. Use the updated image, then run `docker compose down && docker volume rm wow343_mysql-data` once to re-import with the current dumps (`AUTO_DOWNLOAD_DB=true`). The entrypoint also seeds `updates_include`, so on subsequent boots the built-in `sql/updates` runner keeps the DB aligned with the core |
-| bnetserver logs `SSL Handshake failed stream truncated` every ~30 s | that is Docker's old healthcheck probing port 1119 without speaking TLS. Harmless; the updated image uses a real TLS handshake in `healthcheck.sh` |
+| bnetserver logs `[127.0.0.1:…] SSL Handshake failed stream truncated` every ~30 s even with no client | it is an old image's Docker healthcheck opening/closing port 1119. It does **not** describe a failed player login. Pull and recreate: `docker compose pull && docker compose up -d --force-recreate bnetserver`; the current healthcheck reads `/proc/net/tcp` and never connects to TLS |
+| Client cannot log in, but both servers are running | use the **64-bit 3.4.3.54261** client; set `SET portal "127.0.0.1"` in `WTF/Config.wtf` (not `realmlist.wtf`); create an e-mail-style account with `bnetaccount create`; then check `docker compose logs --since=2m bnetserver`. Also refresh an older install with `docker compose pull && docker compose up -d --force-recreate` |
+| Client reports `BLZ51900003` when using Arctium locally | launch with `--version Classic --dev` and **remove `--staticseed`**. The image registers build 54261's normal `25FD…` auth seed, while the common static-seed launcher patch sends a different `179D…` seed. `--dev` handles the bundled development TLS certificate on localhost |
+| Login works on the Docker host but not from another PC | set `.env` `REALM_ADDRESS=<Docker host LAN IP>` and set the client's `WTF/Config.wtf` portal to the same bare IP, then `docker compose up -d --force-recreate bnetserver worldserver`. Forward TCP 1119, 8081, 8085 and 8086 for internet clients |
+| Client receives a version/realm-not-permitted error | only build **54261** is supported. The entrypoint now repairs both `auth.build_info` and an older `auth.realmlist.gamebuild`; pull/recreate both server containers |
 | `Some required *.txt GameTable files not found` | `./data/gt` is missing — re-run the extractor |
 | No `extract-data.sh` / `tools/` in the repo folder | the `extractors` service didn't run — `docker compose up -d extractors` and check `docker compose logs extractors` |
 | `Unable to load map and vmap data for starting zones` | `./data/maps` or `./data/vmaps` is incomplete — re-run the extractor (a bare `vmap4assembler .` produces empty vmaps) |

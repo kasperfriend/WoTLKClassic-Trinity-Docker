@@ -97,7 +97,13 @@ services:
       HOTFIXES_DB_URL: ${HOTFIXES_DB_URL:-}
       DB_URL: ${DB_URL:-}
       REALM_NAME: ${REALM_NAME:-TrinityCore 3.4.3}
+      # Host/IP advertised to clients. The entrypoint also uses this for the
+      # bnet REST/SRP response; otherwise remote clients get 127.0.0.1 back.
       REALM_ADDRESS: ${REALM_ADDRESS:-127.0.0.1}
+      # Optional split routing (normally leave blank under Docker bridge/NAT).
+      REALM_LOCAL_ADDRESS: ${REALM_LOCAL_ADDRESS:-}
+      LOGIN_REST_EXTERNAL_ADDRESS: ${LOGIN_REST_EXTERNAL_ADDRESS:-}
+      LOGIN_REST_LOCAL_ADDRESS: ${LOGIN_REST_LOCAL_ADDRESS:-}
       TZ: ${TZ:-Europe/Kiev}
     ports:
       - "1119:1119"   # battle.net logon protocol
