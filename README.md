@@ -300,7 +300,18 @@ That also creates the game account `myuser@local#1` for you.
   client is a different build and cannot connect. Use the compatible client
   linked by the [upstream source README](https://github.com/xHashii/3.4.3_Source#readme)
   and start it with the launcher/executable supplied for that client; a stock
-  Battle.net-launched executable may ignore private login endpoints.
+  Battle.net-launched executable may ignore private login endpoints. With an
+  Arctium-compatible launcher on localhost, use:
+
+  ```powershell
+  & ".\Arctium WoW Launcher.exe" --version Classic --dev
+  ```
+
+  Do **not** add `--staticseed` for this image. The 54261 auth row contains the
+  client's normal `25FD…` seed; Arctium's standard static-seed patch uses a
+  different `179D…` value and authentication then ends in `BLZ51900003`.
+  `--dev` is for loopback/private-LAN testing, where the bundled development
+  TLS certificate is expected; do not use it for an Internet-facing portal.
 * In the client, edit **`WTF/Config.wtf`** and set:
 
   ```text
@@ -635,6 +646,7 @@ and the workflow builds that instead.
 | worldserver initialises fully, then exits/restarts on an assertion | usually a stale world/hotfixes DB from an older source revision or from the legacy `Databases.7z`. Use the updated image, then run `docker compose down && docker volume rm wow343_mysql-data` once to re-import with the current dumps (`AUTO_DOWNLOAD_DB=true`). The entrypoint also seeds `updates_include`, so on subsequent boots the built-in `sql/updates` runner keeps the DB aligned with the core |
 | bnetserver logs `[127.0.0.1:…] SSL Handshake failed stream truncated` every ~30 s even with no client | it is an old image's Docker healthcheck opening/closing port 1119. It does **not** describe a failed player login. Pull and recreate: `docker compose pull && docker compose up -d --force-recreate bnetserver`; the current healthcheck reads `/proc/net/tcp` and never connects to TLS |
 | Client cannot log in, but both servers are running | use the **64-bit 3.4.3.54261** client; set `SET portal "127.0.0.1"` in `WTF/Config.wtf` (not `realmlist.wtf`); create an e-mail-style account with `bnetaccount create`; then check `docker compose logs --since=2m bnetserver`. Also refresh an older install with `docker compose pull && docker compose up -d --force-recreate` |
+| Client reports `BLZ51900003` when using Arctium locally | launch with `--version Classic --dev` and **remove `--staticseed`**. The image registers build 54261's normal `25FD…` auth seed, while the common static-seed launcher patch sends a different `179D…` seed. `--dev` handles the bundled development TLS certificate on localhost |
 | Login works on the Docker host but not from another PC | set `.env` `REALM_ADDRESS=<Docker host LAN IP>` and set the client's `WTF/Config.wtf` portal to the same bare IP, then `docker compose up -d --force-recreate bnetserver worldserver`. Forward TCP 1119, 8081, 8085 and 8086 for internet clients |
 | Client receives a version/realm-not-permitted error | only build **54261** is supported. The entrypoint now repairs both `auth.build_info` and an older `auth.realmlist.gamebuild`; pull/recreate both server containers |
 | `Some required *.txt GameTable files not found` | `./data/gt` is missing — re-run the extractor |
