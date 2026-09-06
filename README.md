@@ -110,11 +110,15 @@ client data:
 3. **Creates the databases** `auth`, `characters`, `world`, `hotfixes`
    (utf8mb4) and imports the base schemas shipped in the source.
 4. **Fetches the world database.** The source repo doesn't ship one, so the
-   entrypoint downloads the **official database bundle** for this source
-   (`Databases.7z`, ~48 MB, published by the upstream author) and imports the
-   full `world`, `hotfixes`, `auth` and `characters` dumps — 10–20 min, one
-   time only. Afterwards the core's built-in auto-updater applies
-   `sql/updates/*` on every start.
+   entrypoint downloads the **official full dumps for the revision in the
+   image** (`world_full_2026_08_10.sql` + `hotfixes_full_2026_08_10.sql`,
+   ~300 MB from the author's `DB.2608` release) and imports the full `world`
+   and `hotfixes` content — 10–20 min, one time only. The `auth`/`characters`
+   base schemas ship inside the source tree. Afterwards the core's built-in
+   auto-updater applies `sql/updates/*` on every start; the entrypoint also
+   seeds the `world`/`hotfixes` `updates_include` rows so that always happens
+   on a fresh image, not only when the dump happened to carry them, and
+   inserts the `auth.build_info` row the 3.4.3 client needs.
 5. **Registers the realm** in `auth.realmlist` and starts both servers.
 6. **Drops the extractors into this folder** — `extract-data.sh`,
    `extract-data.bat` and `tools/` — so step 3 needs no further Docker work.
@@ -431,7 +435,8 @@ GitHub repo:
 | `SERVER_IMAGE` | `ghcr.io/kasperfriend/wotlkclassic-trinity-docker:latest` | the public prebuilt image the stack runs; set it to a local name (e.g. `trinitycore-3.4.3:local`) to compile here instead |
 | `SERVER_PULL_POLICY` | `missing` | `missing` = use the cached image, pull when it isn't there. `never` = never touch a registry (**required** with a local-only `SERVER_IMAGE`, and the pairing that prevents `pull access denied for trinitycore-3.4.3`); `always` = pull on every `up` |
 | `AUTO_DOWNLOAD_DB` | `true` | download the official DB bundle when `world` is empty |
-| `DB_URL` | upstream `databases` release | where that bundle is downloaded from (the entrypoint default, forwarded to the containers) |
+| `WORLD_DB_URL` / `HOTFIXES_DB_URL` | `xHashii/WyrmrestCore` `DB.2608` (`world_full_2026_08_10.sql`, `hotfixes_full_2026_08_10.sql`) | full `world`/`hotfixes` dumps downloaded on first boot (the entrypoint defaults) |
+| `DB_URL` | empty | legacy one-file `.7z` database bundle; set it to the old `lineagedr` `databases` release only if you want that fallback instead of the current dumps |
 | `SOURCE_REPO` / `SOURCE_BRANCH` / `SOURCE_SHA` | `xHashii/3.4.3_Source` `main` | what the image is compiled from — set these if upstream ever moves |
 | `REALM_NAME` | `TrinityCore 3.4.3` | realm name in the client realm list |
 | `REALM_ADDRESS` | `127.0.0.1` | realm address clients connect to |
@@ -544,10 +549,14 @@ docker compose restart worldserver
 
 * **Preserved across restarts:** every setting you edit — motd, rates,
   `Logger.*`, `MaxPingTime`, `GameType`, anything.
-* **Re-applied on every boot:** only the four `*DatabaseInfo` lines
+* **Re-applied on every boot:** the four `*DatabaseInfo` lines
   (`Login`/`World`/`Character`/`Hotfix`), because they are built from the
-  `MYSQL_*` variables in `.env`. Change the password in `.env` and the conf
-  follows automatically — don't hand-edit those lines.
+  `MYSQL_*` variables in `.env`, plus the container path defaults
+  (`DataDir`/`LogsDir`/`SourceDirectory`, or the bnet TLS cert paths) **when
+  they still have stock defaults** — this repairs confs left behind by an
+  older image without touching a value you deliberately changed. Change the
+  password in `.env` and the conf follows automatically — don't hand-edit
+  those lines.
 * **Reset to defaults:** delete the file and restart; it is re-seeded from the
   template.
 * The pristine, fully commented templates stay inside the image at
@@ -581,7 +590,9 @@ and the workflow builds that instead.
 | worldserver logs `client data is missing or empty in ./data` | expected until step 3 is done — run `./extract-data.sh` (or `extract-data.bat`) with your 3.4.3 client, then `docker compose restart worldserver` (or just wait: it re-checks every 60 s) |
 | Data is extracted but worldserver still says it's missing | it isn't in the right place — the five required folders must sit directly in `./data` (`./data/maps`, not `./data/data/maps`); see [step 4](#4-the-data-goes-in-data) |
 | I already have extracted data, just need to put it in the stack | `./place-data.sh /path/to/extracted` (Windows: drag the folder onto `place-data.bat`) — places `dbc maps vmaps mmaps gt cameras` into `./data`, replaces stale ones, verifies the required folders, then `docker compose restart worldserver` |
-| worldserver logs `Waiting for import files` | world DB is empty — either let the DB bundle download (`AUTO_DOWNLOAD_DB=true`) or drop dumps into `./import/world/` |
+| worldserver logs `Waiting for import files` | world/hotfixes DB are empty — either let the full DB dumps download (`AUTO_DOWNLOAD_DB=true`) or drop dumps into `./import/world/` |
+| worldserver initialises fully, then exits/restarts on an assertion | usually a stale world/hotfixes DB from an older source revision or from the legacy `Databases.7z`. Use the updated image, then run `docker compose down && docker volume rm wow343_mysql-data` once to re-import with the current dumps (`AUTO_DOWNLOAD_DB=true`). The entrypoint also seeds `updates_include`, so on subsequent boots the built-in `sql/updates` runner keeps the DB aligned with the core |
+| bnetserver logs `SSL Handshake failed stream truncated` every ~30 s | that is Docker's old healthcheck probing port 1119 without speaking TLS. Harmless; the updated image uses a real TLS handshake in `healthcheck.sh` |
 | `Some required *.txt GameTable files not found` | `./data/gt` is missing — re-run the extractor |
 | No `extract-data.sh` / `tools/` in the repo folder | the `extractors` service didn't run — `docker compose up -d extractors` and check `docker compose logs extractors` |
 | `Unable to load map and vmap data for starting zones` | `./data/maps` or `./data/vmaps` is incomplete — re-run the extractor (a bare `vmap4assembler .` produces empty vmaps) |
@@ -603,6 +614,7 @@ and the workflow builds that instead.
   → [TrinityCore](https://github.com/TrinityCore/TrinityCore) `wotlk_classic`
   (GPL-2.0 — the image therefore ships GPL-2.0 software; these packaging
   files are provided as-is).
-* Databases: official
-  [`Databases.7z` release](https://github.com/lineagedr/3.4.3_Source/releases/tag/databases)
-  by the upstream author.
+* Databases: official `DB.2608` full dumps
+  (`world_full_2026_08_10.sql`, `hotfixes_full_2026_08_10.sql`) published by the
+  upstream author; the legacy `lineagedr` `databases` `.7z` bundle remains
+  available as the `DB_URL` fallback.

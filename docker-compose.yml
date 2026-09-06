@@ -89,9 +89,12 @@ services:
       MYSQL_PASSWORD: ${MYSQL_ROOT_PASSWORD:-wow}
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-wow}
       AUTO_DOWNLOAD_DB: ${AUTO_DOWNLOAD_DB:-true}
-      # Where the world/auth/characters dump comes from. Empty = the entrypoint
-      # default (the upstream `databases` release); override in .env if that
-      # release ever moves.
+      # Where the world/hotfixes dumps come from. Empty = the entrypoint
+      # defaults (the current WyrmrestCore DB.2608 release); override in .env
+      # if the author publishes a newer one. DB_URL is the legacy .7z bundle
+      # fallback, used only when explicitly set.
+      WORLD_DB_URL: ${WORLD_DB_URL:-}
+      HOTFIXES_DB_URL: ${HOTFIXES_DB_URL:-}
       DB_URL: ${DB_URL:-}
       REALM_NAME: ${REALM_NAME:-TrinityCore 3.4.3}
       REALM_ADDRESS: ${REALM_ADDRESS:-127.0.0.1}

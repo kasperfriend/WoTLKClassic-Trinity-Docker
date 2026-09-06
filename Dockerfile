@@ -103,6 +103,7 @@ RUN apt-get update \
       libreadline8t64 \
       libssl3t64 \
       mariadb-client \
+      openssl \
       p7zip-full \
       procps \
       tzdata \
